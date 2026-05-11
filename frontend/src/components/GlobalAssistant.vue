@@ -9,10 +9,9 @@ const router = useRouter()
 const courseId = ref('default')
 const courseName = ref('EduAI')
 const courseIcon = ref('🤖')
-const currentPage = ref('home')  // 'home' | 'course'
-const allCourses = ref([])  // список всех курсов платформы
+const currentPage = ref('home')
+const allCourses = ref([])
 
-// Загружаем список курсов один раз при монтировании
 async function loadAllCourses() {
   try {
     const res = await fetch('/api/courses')
@@ -20,7 +19,6 @@ async function loadAllCourses() {
   } catch (e) {}
 }
 
-// page_context — передаётся в каждый запрос к API
 const pageContext = computed(() => ({
   current_page: currentPage.value,
   current_course_id: courseId.value !== 'default' ? courseId.value : null,
@@ -66,26 +64,14 @@ const canSend = computed(() => message.value.trim().length > 0 && !isBusy.value)
 
 function togglePanel() {
   if (voiceMode.value) {
-    // If voice mode is active, clicking FAB stops voice mode
     stopVoiceMode()
     return
   }
   isOpen.value = !isOpen.value
-  if (isOpen.value) {
-    stopWakeWord()
-  } else {
-    startWakeWord()
-  }
 }
 
 function closePanel() {
   isOpen.value = false
-  startWakeWord()
-}
-
-function handleHistoryUpdate(newHistory) {
-  history.value = [...newHistory]
-  scrollBottom()
 }
 
 async function scrollBottom() {
@@ -95,172 +81,209 @@ async function scrollBottom() {
 
 // ─── Voice Mode State ────────────────────────────────────────────────────────
 const voiceMode = ref(false)
-// voiceState: 'IDLE', 'LISTENING', 'THINKING', 'SPEAKING'
-const voiceState = ref('IDLE')
+const voiceState = ref('IDLE') // IDLE | LISTENING | THINKING | SPEAKING
 const voiceTranscript = ref('')
 const voiceAssistantText = ref('')
 const isHearingSpeech = ref(false)
+const voiceError = ref('')
 
 let audioQueue = []
 let isAudioPlaying = false
 let streamDone = false
 let currentAudio = null
-let wakeWordStopped = false
 
-// ─── Wake Word & Continuous Recognition ──────────────────────────────────────
-const wakeWordRecognition = ref(null)
+// ─── Speech Recognition ───────────────────────────────────────────────────
+// Два режима: фоновый (wake word) и активный (диалог)
+let recognition = null
+let recognitionActive = false  // работает ли recognition прямо сейчас
+let shouldRestart = false      // нужно ли перезапускать после onend
+let voiceModeInternal = false  // синхронная копия voiceMode для onresult
+let wakeWordTriggered = false  // debounce для wake word
 
-function initWakeWord() {
+const WAKE_WORDS = ['кортана', 'кортан', 'эдуай', 'edu ai', 'ассистент', 'помоги мне']
+
+function initRecognition() {
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
   if (!SpeechRecognition) {
-    console.error('[WakeWord] SpeechRecognition not supported')
+    console.warn('[Voice] SpeechRecognition не поддерживается')
     return
   }
-  
-  const rec = new SpeechRecognition()
-  rec.lang = 'ru-RU'
-  rec.interimResults = true
-  rec.continuous = true
-  rec.maxAlternatives = 1
-  
-  rec.onstart = () => {
-    console.log('[WakeWord] ✅ Started listening')
-    if (voiceMode.value && voiceState.value === 'IDLE') {
-      voiceState.value = 'LISTENING'
-    }
-  }
-  
-  rec.onspeechstart = () => {
-    isHearingSpeech.value = true
-    if (voiceMode.value && (voiceState.value === 'LISTENING' || voiceState.value === 'IDLE')) {
-      // Barge-in: if speaking, interrupt and go to listening
-      if (voiceState.value === 'SPEAKING') {
-         stopAudioQueue()
-         voiceState.value = 'LISTENING'
-      }
-    }
-  }
-  
-  rec.onspeechend = () => {
-    isHearingSpeech.value = false
-  }
-  
-  rec.onerror = (e) => {
-    console.warn('[WakeWord] Error:', e.error)
-  }
-  
-  rec.onend = () => {
-    isHearingSpeech.value = false
-    if (!wakeWordStopped && !isOpen.value) {
-      // restart recognition unless manually stopped or text chat is open
-      setTimeout(() => {
-        try { rec.start() } catch (err) {}
-      }, 300)
-    }
-  }
-  
-  rec.onresult = (e) => {
-    let finalTranscript = ''
-    let interimTranscript = ''
-    
-    for (let i = e.resultIndex; i < e.results.length; i++) {
-      const text = e.results[i][0].transcript.toLowerCase()
-      if (e.results[i].isFinal) {
-        finalTranscript += text + ' '
-      } else {
-        interimTranscript += text + ' '
-      }
-    }
-    
-    const currentText = (finalTranscript || interimTranscript).trim()
 
-    if (!voiceMode.value) {
-      // --- WAKE WORD MODE ---
-      if (currentText.includes('кортан') || currentText.includes('картон') || currentText.includes('картан') || currentText.includes('помог')) {
-        console.log('[WakeWord] 🚀 DETECTED')
-        const match = currentText.match(/(кортан[а-я]*|картон[а-я]*|картан[а-я]*|помог[а-я]*)[,!.?\s]*(.*)/)
-        let prompt = ''
-        if (match && match[2]) prompt = match[2].trim()
-        
-        startVoiceMode(prompt)
+  recognition = new SpeechRecognition()
+  recognition.lang = 'ru-RU'
+  recognition.interimResults = true
+  recognition.continuous = false  // continuous = false надёжнее; перезапускаем вручную
+  recognition.maxAlternatives = 1
+
+  recognition.onstart = () => {
+    recognitionActive = true
+    isHearingSpeech.value = false
+  }
+
+  recognition.onspeechstart = () => {
+    isHearingSpeech.value = true
+    // Barge-in: если ИИ говорит — прерываем и переходим к слушанию
+    if (voiceModeInternal && voiceState.value === 'SPEAKING') {
+      interruptSpeaking()
+    }
+  }
+
+  recognition.onspeechend = () => {
+    isHearingSpeech.value = false
+  }
+
+  recognition.onresult = (e) => {
+    let finalText = ''
+    let interimText = ''
+
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const t = e.results[i][0].transcript
+      if (e.results[i].isFinal) finalText += t
+      else interimText += t
+    }
+
+    const currentText = (finalText || interimText).trim()
+
+    if (!voiceModeInternal) {
+      // Режим wake word — проверяем и interim, и final
+      const lower = currentText.toLowerCase()
+      const wakeWord = WAKE_WORDS.find(w => lower.includes(w))
+      if (wakeWord) {
+        // Debounce: не активируем дважды
+        if (wakeWordTriggered) return
+        wakeWordTriggered = true
+        setTimeout(() => { wakeWordTriggered = false }, 3000)
+        const afterWake = lower.split(wakeWord).slice(1).join(' ').trim()
+        startVoiceMode(afterWake)
       }
     } else {
-      // --- ACTIVE CONVERSATION MODE ---
-      if (voiceState.value === 'LISTENING' || voiceState.value === 'IDLE') {
-         voiceTranscript.value = currentText
-         if (finalTranscript.trim()) {
-            handleUserVoice(finalTranscript.trim())
-         }
+      // Активный диалог
+      if (voiceState.value === 'LISTENING') {
+        voiceTranscript.value = currentText
+        if (finalText.trim()) {
+          handleUserVoice(finalText.trim())
+        }
       }
     }
   }
-  
-  wakeWordRecognition.value = rec
-}
 
-function startWakeWord() {
-  if (!wakeWordRecognition.value) return
-  wakeWordStopped = false
-  try { wakeWordRecognition.value.start() } catch (e) {}
-}
-
-function stopWakeWord() {
-  wakeWordStopped = true
-  if (wakeWordRecognition.value) {
-    try { wakeWordRecognition.value.stop() } catch(e) {}
+  recognition.onerror = (e) => {
+    recognitionActive = false
+    if (e.error === 'no-speech') {
+      // Нормальный тайм-аут — перезапускаем если нужно
+    } else if (e.error === 'aborted') {
+      // Намеренно остановлено — не перезапускаем
+      return
+    } else {
+      console.warn('[Voice] Ошибка:', e.error)
+      if (voiceModeInternal) {
+        voiceError.value = `Ошибка микрофона: ${e.error}`
+      }
+    }
   }
+
+  recognition.onend = () => {
+    recognitionActive = false
+    isHearingSpeech.value = false
+    if (shouldRestart) {
+      setTimeout(() => startRecognitionIfNeeded(), 200)
+    }
+  }
+}
+
+function startRecognitionIfNeeded() {
+  if (recognitionActive || !recognition) return
+  // Не запускаем когда: чат открыт (без голосового режима) или ИИ думает/говорит
+  if (isOpen.value && !voiceModeInternal) return
+  if (voiceModeInternal && (voiceState.value === 'THINKING')) return
+
+  try {
+    shouldRestart = true
+    recognition.start()
+  } catch (e) {
+    // уже запущен или другая ошибка
+  }
+}
+
+function stopRecognition() {
+  shouldRestart = false
+  if (recognition && recognitionActive) {
+    try { recognition.stop() } catch (e) {}
+  }
+}
+
+function interruptSpeaking() {
+  stopAudioQueue()
+  voiceState.value = 'LISTENING'
+  voiceAssistantText.value = ''
+  // Перезапускаем распознавание для нового ввода
+  stopRecognition()
+  setTimeout(() => startRecognitionIfNeeded(), 100)
 }
 
 onMounted(() => {
   loadAllCourses()
-  initWakeWord()
+  initRecognition()
+  // Запускаем после первого взаимодействия (требование браузера)
   const startOnInteraction = () => {
-    startWakeWord()
+    shouldRestart = true
+    startRecognitionIfNeeded()
   }
   document.addEventListener('click', startOnInteraction, { once: true })
   document.addEventListener('keydown', startOnInteraction, { once: true })
 })
 
 onUnmounted(() => {
-  stopWakeWord()
+  stopRecognition()
   stopAudioQueue()
 })
 
-// ─── Voice Conversation Logic ────────────────────────────────────────────────
+// ─── Voice Mode ──────────────────────────────────────────────────────────────
 function startVoiceMode(initialPrompt = '') {
-  isOpen.value = false // close text chat if open
+  isOpen.value = false
   voiceMode.value = true
-  voiceTranscript.value = initialPrompt || 'Слушаю вас...'
+  voiceModeInternal = true
+  voiceError.value = ''
+  voiceTranscript.value = ''
   voiceAssistantText.value = ''
-  
+
   if (initialPrompt.trim()) {
+    voiceTranscript.value = initialPrompt
     handleUserVoice(initialPrompt.trim())
   } else {
     voiceState.value = 'LISTENING'
+    startRecognitionIfNeeded()
   }
 }
 
 function stopVoiceMode() {
   voiceMode.value = false
+  voiceModeInternal = false
   voiceState.value = 'IDLE'
+  voiceError.value = ''
   stopAudioQueue()
+  stopRecognition()
   voiceTranscript.value = ''
   voiceAssistantText.value = ''
-  
-  // Restart background wake word listener
-  startWakeWord()
+  // Возобновляем фоновый wake word
+  shouldRestart = true
+  setTimeout(() => startRecognitionIfNeeded(), 300)
 }
 
 async function handleUserVoice(text) {
-  if (!text.trim()) return
-  
-  // Stop recognition temporarily while thinking to avoid hearing its own speech or echoing
-  stopWakeWord()
-  
+  if (!text.trim()) {
+    voiceState.value = 'LISTENING'
+    return
+  }
+
+  // Останавливаем распознавание на время ответа ИИ
+  stopRecognition()
+
   voiceState.value = 'THINKING'
   voiceTranscript.value = text
   voiceAssistantText.value = ''
-  
+  voiceError.value = ''
+
   history.value.push({ role: 'user', content: text, sources: [] })
   history.value.push({ role: 'assistant', content: '', sources: [] })
   const assistantIdx = history.value.length - 1
@@ -283,7 +306,7 @@ async function handleUserVoice(text) {
         page_context: pageContext.value
       }),
     })
-    
+
     if (!res.ok) throw new Error(await res.text())
 
     const reader = res.body.getReader()
@@ -291,11 +314,11 @@ async function handleUserVoice(text) {
     let buffer = ''
 
     while (true) {
-      if (!voiceMode.value) break // abort if user closed voice mode
+      if (!voiceModeInternal) break
 
       const { value, done } = await reader.read()
       if (done) break
-      
+
       buffer += decoder.decode(value, { stream: true })
       const parts = buffer.split('\n\n')
       buffer = parts.pop() ?? ''
@@ -305,79 +328,89 @@ async function handleUserVoice(text) {
         if (!line) continue
         const jsonText = line.slice('data:'.length).trim()
         if (!jsonText) continue
-        
-                const evt = JSON.parse(jsonText)
-                if (evt.type === 'token') {
-                   history.value[assistantIdx].content += String(evt.content ?? '')
-                   voiceAssistantText.value += String(evt.content ?? '')
-                } else if (evt.type === 'sentence') {
-                   if (evt.audio_b64) {
-                       audioQueue.push(evt.audio_b64)
-                       playNextAudio()
-                   }
-                } else if (evt.type === 'action') {
-                   // Выполняем действие от ИИ (например, навигация)
-                   executeAction(evt)
-                } else if (evt.type === 'sources') {
-                   history.value[assistantIdx].sources = Array.isArray(evt.content) ? evt.content : []
-                }
+
+        let evt
+        try { evt = JSON.parse(jsonText) } catch { continue }
+
+        if (evt.type === 'token') {
+          history.value[assistantIdx].content += String(evt.content ?? '')
+          voiceAssistantText.value += String(evt.content ?? '')
+        } else if (evt.type === 'sentence') {
+          if (evt.audio_b64) {
+            audioQueue.push(evt.audio_b64)
+            playNextAudio()
+          }
+        } else if (evt.type === 'action' && evt.action === 'navigate') {
+          executeAction(evt)
+        } else if (evt.type === 'sources') {
+          history.value[assistantIdx].sources = Array.isArray(evt.content) ? evt.content : []
+        } else if (evt.type === 'error') {
+          voiceError.value = String(evt.content ?? 'Ошибка')
+        }
       }
     }
-    
+
     streamDone = true
-    if (!isAudioPlaying && audioQueue.length === 0 && voiceMode.value) {
-        resumeListening()
+    if (!isAudioPlaying && audioQueue.length === 0 && voiceModeInternal) {
+      resumeListening()
     }
 
   } catch (e) {
-    console.error(e)
-    if (voiceMode.value) resumeListening()
+    console.error('[Voice] Ошибка запроса:', e)
+    voiceError.value = 'Не удалось получить ответ. Попробуйте ещё раз.'
+    if (voiceModeInternal) resumeListening()
   }
 }
 
 async function playNextAudio() {
-  if (isAudioPlaying || audioQueue.length === 0 || !voiceMode.value) return
-  
+  if (isAudioPlaying || audioQueue.length === 0 || !voiceModeInternal) return
+
   isAudioPlaying = true
   voiceState.value = 'SPEAKING'
-  
-  const b64 = audioQueue.shift()
-  try {
-      const byteCharacters = atob(b64)
-      const byteNumbers = new Array(byteCharacters.length)
-      for (let i = 0; i < byteCharacters.length; i++) {
-        byteNumbers[i] = byteCharacters.charCodeAt(i)
-      }
-      const byteArray = new Uint8Array(byteNumbers)
-      const blob = new Blob([byteArray], {type: 'audio/mpeg'})
-      const url = URL.createObjectURL(blob)
-      
-      currentAudio = new Audio(url)
-      
-      currentAudio.onended = () => {
-          URL.revokeObjectURL(url)
-          isAudioPlaying = false
-          
-          if (!voiceMode.value) return
-          if (audioQueue.length > 0) {
-              playNextAudio()
-          } else if (streamDone) {
-              resumeListening()
-          }
-      }
-      
-      currentAudio.onerror = () => {
-          isAudioPlaying = false
-          if (audioQueue.length > 0) playNextAudio()
-          else if (streamDone) resumeListening()
-      }
 
-      await currentAudio.play()
+  const b64 = audioQueue.shift()
+  let safetyTimer = null
+
+  function onAudioDone() {
+    clearTimeout(safetyTimer)
+    if (currentAudio) {
+      try { URL.revokeObjectURL(currentAudio.src) } catch(e) {}
+    }
+    isAudioPlaying = false
+    currentAudio = null
+    if (!voiceModeInternal) return
+    if (audioQueue.length > 0) {
+      playNextAudio()
+    } else if (streamDone) {
+      resumeListening()
+    }
+  }
+
+  try {
+    const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0))
+    const blob = new Blob([bytes], { type: 'audio/mpeg' })
+    const url = URL.createObjectURL(blob)
+
+    currentAudio = new Audio(url)
+    currentAudio.onended = onAudioDone
+    currentAudio.onerror = onAudioDone
+
+    // Safety timeout: если onended не сработает, продолжаем через duration+3s
+    currentAudio.onloadedmetadata = () => {
+      const dur = currentAudio?.duration || 10
+      safetyTimer = setTimeout(onAudioDone, (dur + 3) * 1000)
+    }
+    // Fallback если metadata не загрузится
+    safetyTimer = setTimeout(onAudioDone, 15000)
+
+    await currentAudio.play()
   } catch(e) {
-      console.error('Audio play error', e)
-      isAudioPlaying = false
-      if (audioQueue.length > 0) playNextAudio()
-      else if (streamDone) resumeListening()
+    console.error('[Audio] Ошибка воспроизведения:', e)
+    clearTimeout(safetyTimer)
+    isAudioPlaying = false
+    currentAudio = null
+    if (audioQueue.length > 0) playNextAudio()
+    else if (streamDone) resumeListening()
   }
 }
 
@@ -385,22 +418,26 @@ function stopAudioQueue() {
   audioQueue = []
   streamDone = true
   if (currentAudio) {
-      currentAudio.pause()
-      currentAudio = null
+    currentAudio.pause()
+    currentAudio = null
   }
   isAudioPlaying = false
 }
 
 function resumeListening() {
-  if (!voiceMode.value) return
+  if (!voiceModeInternal) return
   voiceState.value = 'LISTENING'
   voiceTranscript.value = ''
   voiceAssistantText.value = ''
-  startWakeWord()
+  // Небольшая задержка чтобы не поймать эхо
+  setTimeout(() => {
+    if (voiceModeInternal && voiceState.value === 'LISTENING') {
+      startRecognitionIfNeeded()
+    }
+  }, 500)
 }
 
-
-// ─── Text Chat SSE streaming ───────────────────────────────────────────────
+// ─── Text Chat SSE ────────────────────────────────────────────────────────────
 async function sendStream() {
   if (!canSend.value) return
   const userText = message.value.trim()
@@ -430,7 +467,7 @@ async function sendStream() {
     })
     if (!res.ok || !res.body) throw new Error(await res.text())
 
-    const reader  = res.body.getReader()
+    const reader = res.body.getReader()
     const decoder = new TextDecoder()
     let buffer = ''
 
@@ -441,23 +478,25 @@ async function sendStream() {
       const parts = buffer.split('\n\n')
       buffer = parts.pop() ?? ''
 
-        for (const part of parts) {
-          const line = part.split('\n').map(l => l.trim()).find(l => l.startsWith('data:'))
-          if (!line) continue
-          const jsonText = line.slice('data:'.length).trim()
-          if (!jsonText) continue
-          const evt = JSON.parse(jsonText)
-          if (evt.type === 'sources') {
-            history.value[assistantIdx].sources = Array.isArray(evt.content) ? evt.content : []
-          } else if (evt.type === 'token') {
-            history.value[assistantIdx].content += String(evt.content ?? '')
-            await scrollBottom()
-          } else if (evt.type === 'action') {
-            executeAction(evt)
-          } else if (evt.type === 'error') {
-            errorText.value = String(evt.content ?? 'Неизвестная ошибка')
-          }
+      for (const part of parts) {
+        const line = part.split('\n').map(l => l.trim()).find(l => l.startsWith('data:'))
+        if (!line) continue
+        const jsonText = line.slice('data:'.length).trim()
+        if (!jsonText) continue
+        let evt
+        try { evt = JSON.parse(jsonText) } catch { continue }
+
+        if (evt.type === 'sources') {
+          history.value[assistantIdx].sources = Array.isArray(evt.content) ? evt.content : []
+        } else if (evt.type === 'token') {
+          history.value[assistantIdx].content += String(evt.content ?? '')
+          await scrollBottom()
+        } else if (evt.type === 'action') {
+          executeAction(evt)
+        } else if (evt.type === 'error') {
+          errorText.value = String(evt.content ?? 'Неизвестная ошибка')
         }
+      }
     }
   } catch (e) {
     errorText.value = e?.message ?? String(e)
@@ -469,20 +508,12 @@ async function sendStream() {
 
 function clearHistory() { history.value = []; errorText.value = '' }
 
-// ─── Quick-reply suggestions ──────────────────────────────────────────────
+// ─── Quick suggestions ────────────────────────────────────────────────────────
 const quickSuggestions = computed(() => {
-  if (currentPage.value === 'home') {
-    return [
-      'Какие есть курсы?',
-      'Что ты умеешь?',
-      'С чего начать обучение?',
-    ]
+  if (currentPage.value === 'course') {
+    return ['О чём этот курс?', 'Объясни основные понятия', 'Какие есть ещё курсы?']
   }
-  return [
-    'О чём этот курс?',
-    'Что я узнаю на курсе?',
-    'Какие ещё есть курсы?',
-  ]
+  return ['Какие есть курсы?', 'Что ты умеешь?', 'С чего начать обучение?']
 })
 
 function sendSuggestion(text) {
@@ -490,33 +521,89 @@ function sendSuggestion(text) {
   sendStream()
 }
 
-// ─── Actions & Navigation ──────────────────────────────────────────────────
+// ─── Navigation ───────────────────────────────────────────────────────────────
 function executeAction(evt) {
-  if (evt.action === 'navigate') {
-    console.log('[Action] Navigating to:', evt.path)
-    // Небольшая задержка, чтобы пользователь успел осознать ответ
+  if (evt.action === 'navigate' && evt.path) {
+    const delay = voiceModeInternal ? 2000 : 1000
     setTimeout(() => {
+      if (voiceModeInternal) stopVoiceMode()
       router.push(evt.path)
-    }, 1500)
+    }, delay)
   }
 }
 
+// Статусный текст для голосового режима
+const voiceStatusText = computed(() => {
+  switch (voiceState.value) {
+    case 'LISTENING': return isHearingSpeech.value ? 'Слышу вас...' : 'Говорите...'
+    case 'THINKING': return 'Думаю...'
+    case 'SPEAKING': return 'Отвечаю...'
+    default: return 'Ожидание...'
+  }
+})
 </script>
 
 <template>
   <div class="widget-wrap">
-    
-    <!-- Voice Mode Tooltip (shows recognized text or AI response) -->
+
+    <!-- Voice Mode Panel -->
     <Transition name="fade-up">
-      <div v-if="voiceMode && (voiceTranscript || voiceAssistantText)" class="voice-tooltip">
-        <div v-if="voiceTranscript" class="vt-user">{{ voiceTranscript }}</div>
-        <div v-if="voiceAssistantText" class="vt-ai">{{ voiceAssistantText }}</div>
+      <div v-if="voiceMode" class="voice-panel glass">
+        <!-- Header -->
+        <div class="vp-header">
+          <div class="vp-title">
+            <span class="vp-icon">{{ courseIcon }}</span>
+            <div>
+              <div class="vp-name">EduAI</div>
+              <div class="vp-course">{{ courseName }}</div>
+            </div>
+          </div>
+          <button class="vp-close-btn" @click="stopVoiceMode" title="Завершить">✕</button>
+        </div>
+
+        <!-- Orb -->
+        <div class="vp-orb-wrap">
+          <div class="vp-orb" :class="voiceState.toLowerCase()">
+            <div class="vp-orb-ring"></div>
+            <div class="vp-orb-inner">
+              <span class="vp-orb-emoji">
+                <span v-if="voiceState === 'LISTENING'">🎙️</span>
+                <span v-else-if="voiceState === 'THINKING'">✨</span>
+                <span v-else-if="voiceState === 'SPEAKING'">🔊</span>
+                <span v-else>💬</span>
+              </span>
+            </div>
+          </div>
+          <div class="vp-status">{{ voiceStatusText }}</div>
+        </div>
+
+        <!-- Transcript area -->
+        <div class="vp-transcript">
+          <div v-if="voiceError" class="vp-error">{{ voiceError }}</div>
+          <div v-if="voiceTranscript && voiceState !== 'LISTENING'" class="vp-user-text">
+            {{ voiceTranscript }}
+          </div>
+          <div v-if="voiceAssistantText" class="vp-ai-text">
+            {{ voiceAssistantText }}
+          </div>
+          <div v-if="voiceState === 'LISTENING' && !voiceTranscript" class="vp-hint">
+            Говорите — я слушаю
+          </div>
+        </div>
+
+        <!-- Controls -->
+        <div class="vp-controls">
+          <button class="vp-btn-end" @click="stopVoiceMode">
+            <span class="vp-btn-icon">📵</span>
+            Завершить разговор
+          </button>
+        </div>
       </div>
     </Transition>
 
     <!-- Text Chat Panel -->
     <Transition name="widget-slide">
-      <div v-if="isOpen && !voiceMode" class="widget-panel">
+      <div v-if="isOpen && !voiceMode" class="widget-panel glass">
         <div class="wp-header">
           <div class="wp-avatar">{{ courseIcon }}</div>
           <div class="wp-info">
@@ -524,7 +611,7 @@ function executeAction(evt) {
             <div class="wp-course">{{ courseName }}</div>
           </div>
           <div class="wp-actions">
-            <button class="wp-icon-btn" title="Включить голосовой режим" @click="startVoiceMode('')">🎙️</button>
+            <button class="wp-icon-btn" title="Голосовой режим" @click="startVoiceMode('')">🎙️</button>
             <button v-if="history.length" class="wp-icon-btn" title="Очистить" @click="clearHistory">🗑</button>
             <button class="wp-icon-btn" @click="closePanel">✕</button>
           </div>
@@ -535,13 +622,11 @@ function executeAction(evt) {
             <div class="wp-welcome-icon">{{ currentPage === 'course' ? courseIcon : '🤖' }}</div>
             <p v-if="currentPage === 'course'">
               Привет! Я ваш ИИ-ассистент по курсу <strong>{{ courseName }}</strong>.
-              Задайте вопрос голосом или текстом!
             </p>
             <p v-else>
-              Привет! Я ассистент <strong>EduAI</strong>.
-              Помогу выбрать курс или отвечу на вопросы о платформе!
+              Привет! Я ассистент <strong>EduAI</strong>. Помогу выбрать курс!
             </p>
-            <p class="wp-wake-hint">🎤 Скажите «Кортана, помоги» для голосового режима</p>
+            <p class="wp-wake-hint">🎙️ Скажите «Кортана» для голосового режима</p>
             <div class="wp-suggestions">
               <button
                 v-for="s in quickSuggestions"
@@ -552,7 +637,6 @@ function executeAction(evt) {
               >{{ s }}</button>
             </div>
           </div>
-
 
           <div v-for="(msg, i) in history" :key="i" class="wp-msg-row" :class="msg.role">
             <div class="wp-bubble" :class="msg.role">
@@ -575,13 +659,15 @@ function executeAction(evt) {
         <div v-if="errorText" class="wp-error">{{ errorText }}</div>
 
         <div class="wp-input-row">
-          <input
-            class="wp-input"
-            v-model="message"
-            :disabled="isBusy"
-            placeholder="Задайте вопрос…"
-            @keydown.enter.prevent="sendStream"
-          />
+          <div class="wp-input-container">
+            <input
+              class="wp-input"
+              v-model="message"
+              :disabled="isBusy"
+              placeholder="Задайте вопрос…"
+              @keydown.enter.prevent="sendStream"
+            />
+          </div>
           <button class="wp-send-btn" :disabled="!canSend" @click="sendStream">
             <span v-if="!isBusy">↑</span>
             <span v-else class="wp-spinner"></span>
@@ -590,43 +676,38 @@ function executeAction(evt) {
       </div>
     </Transition>
 
-    <!-- Trigger button (FAB) -->
-    <button 
-      class="widget-fab" 
-      :class="{ 
-        open: isOpen && !voiceMode,
-        'voice-mode': voiceMode,
-        'vm-listening': voiceMode && voiceState === 'LISTENING',
-        'vm-thinking': voiceMode && voiceState === 'THINKING',
-        'vm-speaking': voiceMode && voiceState === 'SPEAKING',
-        'hearing': isHearingSpeech && !isOpen
-      }" 
-      @click="togglePanel" 
-      :title="voiceMode ? 'Завершить голосовой режим' : 'Открыть чат'"
+    <!-- FAB Button -->
+    <button
+      class="widget-fab"
+      :class="{
+        'fab-open': isOpen && !voiceMode,
+        'fab-voice': voiceMode,
+        'fab-listening': voiceMode && voiceState === 'LISTENING',
+        'fab-thinking': voiceMode && voiceState === 'THINKING',
+        'fab-speaking': voiceMode && voiceState === 'SPEAKING',
+        'fab-hearing': isHearingSpeech && !voiceMode && !isOpen,
+      }"
+      @click="togglePanel"
+      :title="voiceMode ? 'Завершить голосовой режим' : (isOpen ? 'Закрыть' : 'Открыть EduAI')"
     >
-      <!-- Base pulse for wake word listening (idle) -->
-      <span class="fab-pulse" v-if="!isOpen && !voiceMode && !isHearingSpeech"></span>
-      <!-- Wake word hearing pulse -->
-      <span class="fab-pulse hearing-pulse" v-if="!isOpen && !voiceMode && isHearingSpeech"></span>
-      
-      <!-- Voice Mode Pulses -->
-      <span class="fab-pulse vm-pulse-listen" v-if="voiceMode && voiceState === 'LISTENING'"></span>
-      <span class="fab-pulse vm-pulse-think" v-if="voiceMode && voiceState === 'THINKING'"></span>
-      <span class="fab-pulse vm-pulse-speak" v-if="voiceMode && voiceState === 'SPEAKING'"></span>
+      <span class="fab-pulse" v-if="!isOpen && !voiceMode"></span>
+      <span class="fab-pulse fab-pulse--hear" v-if="isHearingSpeech && !voiceMode && !isOpen"></span>
+      <span class="fab-pulse fab-pulse--listen" v-if="voiceMode && voiceState === 'LISTENING'"></span>
+      <span class="fab-pulse fab-pulse--speak" v-if="voiceMode && voiceState === 'SPEAKING'"></span>
 
       <span class="fab-icon">
         <template v-if="voiceMode">
           <span v-if="voiceState === 'LISTENING'">🎙️</span>
           <span v-else-if="voiceState === 'THINKING'">⏳</span>
           <span v-else-if="voiceState === 'SPEAKING'">🔊</span>
+          <span v-else>🎙️</span>
         </template>
-        <template v-else>
-          {{ isOpen ? '✕' : '🤖' }}
-        </template>
+        <span v-else-if="isOpen">✕</span>
+        <span v-else>🤖</span>
       </span>
-      
+
       <span v-if="!isOpen && !voiceMode" class="fab-label">EduAI</span>
-      <span v-if="voiceMode" class="fab-label">Завершить звонок</span>
+      <span v-if="voiceMode" class="fab-label fab-label--voice">Завершить</span>
     </button>
   </div>
 </template>
@@ -634,284 +715,422 @@ function executeAction(evt) {
 <style scoped>
 .widget-wrap {
   position: fixed;
-  bottom: 20px;
-  right: 20px;
+  bottom: 32px;
+  right: 32px;
   z-index: 9999;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
 }
 
-/* ─── Voice Mode Tooltip ───────────────────────────── */
-.voice-tooltip {
+/* ─── Premium Glassmorphism Utility ─── */
+.glass {
+  background: rgba(23, 23, 35, 0.7);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 24px 50px -12px rgba(0, 0, 0, 0.5);
+}
+
+/* ─── Voice Panel ─────────────────────────────── */
+.voice-panel {
   position: absolute;
-  bottom: 80px;
+  bottom: 84px;
   right: 0;
-  width: 320px;
-  max-width: calc(100vw - 40px);
-  background: var(--card);
-  border: 1px solid var(--border);
+  width: 400px;
+  max-width: calc(100vw - 64px);
+  border-radius: 32px;
+  padding: 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  z-index: 9000;
+}
+
+.vp-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.vp-title {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.vp-icon {
+  font-size: 32px;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.2), rgba(16, 185, 129, 0.1));
+  width: 56px;
+  height: 56px;
   border-radius: 20px;
-  padding: 16px;
-  box-shadow: 0 10px 40px -10px rgba(0,0,0,0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.vp-name { font-weight: 800; font-size: 18px; letter-spacing: -0.02em; color: #fff; }
+.vp-course { font-size: 13px; color: #a1a1aa; margin-top: 2px; }
+
+.vp-close-btn {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #71717a;
+  width: 36px; height: 36px;
+  border-radius: 12px;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.vp-close-btn:hover { background: rgba(239, 68, 68, 0.1); color: #ef4444; border-color: rgba(239, 68, 68, 0.2); transform: rotate(90deg); }
+
+/* ─── Organic Orb ─────────────────────────────── */
+.vp-orb-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  padding: 10px 0;
+}
+
+.vp-orb {
+  width: 140px;
+  height: 140px;
+  border-radius: 50%;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.vp-orb::before {
+  content: '';
+  position: absolute;
+  inset: -8px;
+  border-radius: 50%;
+  background: conic-gradient(from 0deg, #6366f1, #a855f7, #ec4899, #6366f1);
+  opacity: 0.3;
+  filter: blur(12px);
+  animation: orb-spin 4s linear infinite;
+}
+
+.vp-orb.listening::before { opacity: 0.7; filter: blur(16px); animation-duration: 2s; }
+.vp-orb.speaking::before { opacity: 0.9; filter: blur(20px); animation-duration: 1s; }
+.vp-orb.thinking::before { opacity: 0.4; filter: blur(10px); animation-duration: 6s; }
+
+@keyframes orb-spin { to { transform: rotate(360deg); } }
+
+.vp-orb-ring {
+  position: absolute;
+  inset: 2px;
+  border-radius: 50%;
+  background: #0f172a;
+  z-index: 1;
+}
+
+.vp-orb-inner {
+  position: relative;
+  z-index: 2;
+  width: 100px;
+  height: 100px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 30% 30%, rgba(99, 102, 241, 0.4), transparent 70%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: inset 0 0 20px rgba(99, 102, 241, 0.2);
+}
+
+.vp-orb.listening .vp-orb-inner {
+  animation: orb-glow-blue 2s infinite alternate ease-in-out;
+}
+.vp-orb.speaking .vp-orb-inner {
+  animation: orb-glow-green 0.8s infinite alternate ease-in-out;
+}
+
+@keyframes orb-glow-blue { from { box-shadow: inset 0 0 20px rgba(99, 102, 241, 0.3), 0 0 30px rgba(99, 102, 241, 0.2); } to { box-shadow: inset 0 0 40px rgba(99, 102, 241, 0.6), 0 0 50px rgba(99, 102, 241, 0.4); transform: scale(1.05); } }
+@keyframes orb-glow-green { from { box-shadow: inset 0 0 20px rgba(16, 185, 129, 0.3), 0 0 30px rgba(16, 185, 129, 0.2); } to { box-shadow: inset 0 0 40px rgba(16, 185, 129, 0.6), 0 0 50px rgba(16, 185, 129, 0.4); transform: scale(1.1); } }
+
+.vp-orb-emoji { font-size: 36px; filter: drop-shadow(0 0 10px rgba(255,255,255,0.3)); }
+
+.vp-status {
+  font-size: 14px;
+  font-weight: 700;
+  color: #fff;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  background: rgba(255,255,255,0.05);
+  padding: 6px 16px;
+  border-radius: 100px;
+  border: 1px solid rgba(255,255,255,0.1);
+}
+
+/* ─── Transcript ──────────────────────────────── */
+.vp-transcript {
+  min-height: 120px;
+  max-height: 200px;
+  overflow-y: auto;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 24px;
+  padding: 20px;
   display: flex;
   flex-direction: column;
   gap: 12px;
-  backdrop-filter: blur(10px);
-  z-index: 9000;
+  border: 1px solid rgba(255, 255, 255, 0.05);
 }
 
-.vt-user {
-  background: rgba(255,255,255,0.05);
-  padding: 10px 14px;
-  border-radius: 14px;
-  border-bottom-right-radius: 4px;
-  font-size: 14px;
-  color: var(--muted);
-  align-self: flex-end;
-  max-width: 90%;
-  font-style: italic;
-}
+.vp-error { color: #f87171; font-size: 14px; text-align: center; font-weight: 500; }
 
-.vt-ai {
-  background: var(--accent);
-  color: white;
-  padding: 12px 16px;
-  border-radius: 14px;
-  border-bottom-left-radius: 4px;
+.vp-user-text {
   font-size: 15px;
-  line-height: 1.5;
-  align-self: flex-start;
-  max-width: 95%;
-  box-shadow: 0 4px 15px rgba(124, 92, 255, 0.3);
+  color: #a1a1aa;
+  font-style: italic;
+  text-align: right;
+  padding-left: 20px;
 }
 
-.fade-up-enter-active, .fade-up-leave-active {
+.vp-ai-text {
+  font-size: 17px;
+  color: #fff;
+  line-height: 1.6;
+  font-weight: 400;
+}
+
+.vp-hint {
+  font-size: 15px;
+  color: #52525b;
+  text-align: center;
+  margin: auto;
+}
+
+/* ─── Controls ────────────────────────────────── */
+.vp-controls { display: flex; justify-content: center; }
+
+.vp-btn-end {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 32px;
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  color: #ef4444;
+  border-radius: 100px;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
   transition: all 0.3s ease;
 }
-.fade-up-enter-from, .fade-up-leave-to {
-  opacity: 0;
-  transform: translateY(10px) scale(0.95);
-}
+.vp-btn-end:hover { background: #ef4444; color: #fff; transform: translateY(-2px); box-shadow: 0 8px 20px rgba(239, 68, 68, 0.3); }
 
-/* ─── Widget Panel (Text Chat) ───────────────────────────── */
+/* ─── Text Chat Panel ─────────────────────────── */
 .widget-panel {
   position: absolute;
-  bottom: 80px;
+  bottom: 84px;
   right: 0;
-  width: 380px;
-  max-width: calc(100vw - 40px);
-  height: 600px;
-  max-height: calc(100vh - 120px);
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 20px;
+  width: 420px;
+  max-width: calc(100vw - 64px);
+  height: 640px;
+  max-height: calc(100vh - 140px);
+  border-radius: 32px;
   display: flex;
   flex-direction: column;
-  box-shadow: 0 10px 40px -10px rgba(0,0,0,0.5);
   overflow: hidden;
   z-index: 9000;
-  backdrop-filter: blur(10px);
-}
-
-.widget-slide-enter-active, .widget-slide-leave-active {
-  transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
-  transform-origin: bottom right;
-}
-.widget-slide-enter-from, .widget-slide-leave-to {
-  opacity: 0;
-  transform: scale(0.9) translateY(20px);
 }
 
 .wp-header {
   display: flex;
   align-items: center;
-  padding: 16px 20px;
-  background: rgba(255, 255, 255, 0.03);
-  border-bottom: 1px solid var(--border);
+  padding: 24px 28px;
+  background: rgba(255, 255, 255, 0.02);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
-.wp-avatar {
-  font-size: 28px; margin-right: 12px;
-  background: rgba(255, 255, 255, 0.05); width: 44px; height: 44px;
-  display: flex; align-items: center; justify-content: center; border-radius: 50%;
-}
+
+.wp-avatar { font-size: 28px; margin-right: 16px; background: rgba(255, 255, 255, 0.05); width: 50px; height: 50px; display: flex; align-items: center; justify-content: center; border-radius: 18px; border: 1px solid rgba(255,255,255,0.1); }
 .wp-info { flex: 1; }
-.wp-name { font-weight: 600; font-size: 16px; color: var(--text); }
-.wp-course { font-size: 12px; color: var(--accent2); margin-top: 2px; }
-.wp-actions { display: flex; gap: 8px; }
-.wp-icon-btn { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 18px; padding: 4px; border-radius: 6px; transition: all 0.2s; }
-.wp-icon-btn:hover { background: rgba(255, 255, 255, 0.1); color: var(--text); }
+.wp-name { font-weight: 800; font-size: 18px; color: #fff; letter-spacing: -0.01em; }
+.wp-course { font-size: 13px; color: #6366f1; font-weight: 600; margin-top: 2px; }
 
-.wp-thread { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 16px; scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.1) transparent; }
-.wp-welcome { text-align: center; color: var(--muted); font-size: 14px; margin: 20px 0; }
-.wp-welcome-icon { font-size: 40px; margin-bottom: 10px; }
-.wp-msg-row { display: flex; width: 100%; }
+.wp-icon-btn { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); color: #a1a1aa; cursor: pointer; font-size: 18px; width: 36px; height: 36px; border-radius: 12px; display: flex; align-items: center; justify-content: center; transition: all 0.2s; }
+.wp-icon-btn:hover { background: rgba(255, 255, 255, 0.1); color: #fff; transform: translateY(-1px); }
+
+.wp-thread { 
+  flex: 1; 
+  overflow-y: auto; 
+  padding: 28px; 
+  display: flex; 
+  flex-direction: column; 
+  gap: 20px; 
+  scrollbar-width: none;
+}
+.wp-thread::-webkit-scrollbar { display: none; }
+
+.wp-welcome { text-align: center; margin: 40px 0; }
+.wp-welcome-icon { font-size: 48px; margin-bottom: 16px; animation: bounce 2s infinite; }
+@keyframes bounce { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-10px); } }
+
+.wp-welcome p { font-size: 16px; color: #fff; font-weight: 500; line-height: 1.5; }
+.wp-wake-hint { font-size: 13px; color: #71717a !important; margin: 8px 0 24px !important; }
+
+.wp-msg-row { display: flex; width: 100%; animation: slideIn 0.4s cubic-bezier(0, 1, 0, 1); }
+@keyframes slideIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
 .wp-msg-row.user { justify-content: flex-end; }
-.wp-msg-row.assistant { justify-content: flex-start; }
-.wp-bubble { max-width: 85%; padding: 12px 16px; border-radius: 16px; font-size: 14px; line-height: 1.5; }
-.wp-bubble.user { background: var(--accent); color: white; border-bottom-right-radius: 4px; }
-.wp-bubble.assistant { background: rgba(255, 255, 255, 0.05); color: var(--text); border: 1px solid var(--border); border-bottom-left-radius: 4px; }
-.wp-role { font-size: 11px; font-weight: 600; margin-bottom: 4px; opacity: 0.7; text-transform: uppercase; }
-.wp-msg-row.user .wp-role { text-align: right; }
-.wp-text { white-space: pre-wrap; word-break: break-word; }
-.wp-sources { margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.1); display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-.src-label { font-size: 12px; color: var(--muted); }
-.src-pill { font-size: 11px; padding: 2px 8px; background: rgba(255,255,255,0.1); border-radius: 10px; color: var(--text); }
+.wp-bubble { 
+  max-width: 85%; 
+  padding: 16px 20px; 
+  border-radius: 24px; 
+  font-size: 15px; 
+  line-height: 1.6; 
+  position: relative;
+}
 
-.wp-typing { display: flex; gap: 4px; padding: 12px 16px; background: rgba(255, 255, 255, 0.05); border-radius: 16px; border-bottom-left-radius: 4px; width: fit-content; }
-.wp-typing span { width: 6px; height: 6px; background: var(--muted); border-radius: 50%; animation: typing 1s infinite alternate; }
+.wp-bubble.user { 
+  background: linear-gradient(135deg, #6366f1, #4f46e5); 
+  color: #fff; 
+  border-bottom-right-radius: 4px;
+  box-shadow: 0 10px 20px -5px rgba(99, 102, 241, 0.4);
+}
+
+.wp-bubble.assistant { 
+  background: rgba(255, 255, 255, 0.05); 
+  color: #fff; 
+  border: 1px solid rgba(255, 255, 255, 0.1); 
+  border-bottom-left-radius: 4px; 
+}
+
+.wp-role { font-size: 10px; font-weight: 900; margin-bottom: 6px; opacity: 0.5; text-transform: uppercase; letter-spacing: 0.1em; }
+.wp-text { white-space: pre-wrap; word-break: break-word; }
+
+.wp-sources { margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(255, 255, 255, 0.05); display: flex; flex-wrap: wrap; gap: 8px; }
+.src-pill { font-size: 11px; font-weight: 600; padding: 4px 10px; background: rgba(99, 102, 241, 0.1); border: 1px solid rgba(99, 102, 241, 0.2); border-radius: 8px; color: #818cf8; }
+
+.wp-typing { display: flex; gap: 6px; padding: 12px 20px; background: rgba(255,255,255,0.03); border-radius: 20px; border-bottom-left-radius: 4px; width: fit-content; }
+.wp-typing span { width: 8px; height: 8px; background: #6366f1; border-radius: 50%; animation: typing 1.4s infinite; }
 .wp-typing span:nth-child(2) { animation-delay: 0.2s; }
 .wp-typing span:nth-child(3) { animation-delay: 0.4s; }
-@keyframes typing { from { opacity: 0.3; transform: translateY(0); } to { opacity: 1; transform: translateY(-4px); } }
+@keyframes typing { 0%, 100% { opacity: 0.3; transform: scale(0.8); } 50% { opacity: 1; transform: scale(1.2); } }
 
-.wp-error { color: var(--danger); padding: 10px 20px; font-size: 13px; background: rgba(251, 113, 133, 0.1); border-top: 1px solid rgba(251, 113, 133, 0.2); }
+.wp-input-row { 
+  display: flex; 
+  align-items: center; 
+  padding: 20px 28px 32px; 
+  gap: 16px; 
+  background: linear-gradient(to top, rgba(0,0,0,0.4), transparent);
+}
 
-.wp-input-row { display: flex; align-items: center; padding: 16px 20px; gap: 10px; background: rgba(0, 0, 0, 0.2); border-top: 1px solid var(--border); }
-.wp-input { flex: 1; background: transparent; border: none; color: var(--text); font-size: 14px; outline: none; font-family: inherit; }
-.wp-input::placeholder { color: var(--muted); }
-.wp-send-btn { width: 36px; height: 36px; border-radius: 50%; border: none; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all 0.2s; background: var(--accent); color: white; font-size: 18px; }
-.wp-send-btn:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 4px 10px rgba(124, 92, 255, 0.4); }
-.wp-send-btn:disabled { background: rgba(255, 255, 255, 0.1); color: var(--muted); cursor: not-allowed; }
-.wp-spinner { width: 16px; height: 16px; border: 2px solid transparent; border-top-color: white; border-radius: 50%; animation: wp-spin 0.8s linear infinite; }
-@keyframes wp-spin { to { transform: rotate(360deg); } }
+.wp-input-container {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 20px;
+  padding: 12px 20px;
+  display: flex;
+  align-items: center;
+  transition: all 0.3s;
+}
+.wp-input-container:focus-within { border-color: rgba(99, 102, 241, 0.5); background: rgba(255, 255, 255, 0.08); box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.1); }
 
-/* ─── FAB Button ──────────────── */
+.wp-input { flex: 1; background: transparent; border: none; color: #fff; font-size: 15px; outline: none; }
+.wp-input::placeholder { color: #52525b; }
+
+.wp-send-btn { 
+  width: 48px; 
+  height: 48px; 
+  border-radius: 16px; 
+  border: none; 
+  display: flex; 
+  align-items: center; 
+  justify-content: center; 
+  cursor: pointer; 
+  transition: all 0.3s; 
+  background: #6366f1; 
+  color: #fff; 
+  font-size: 20px; 
+  box-shadow: 0 8px 16px rgba(99, 102, 241, 0.3);
+}
+.wp-send-btn:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 12px 24px rgba(99, 102, 241, 0.4); background: #4f46e5; }
+.wp-send-btn:disabled { background: rgba(255,255,255,0.05); color: #3f3f46; box-shadow: none; cursor: not-allowed; }
+
+.wp-suggestions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; justify-content: center; }
+.wp-chip { 
+  background: rgba(255, 255, 255, 0.03); 
+  border: 1px solid rgba(255, 255, 255, 0.08); 
+  color: #a1a1aa; 
+  padding: 8px 18px; 
+  border-radius: 100px; 
+  font-size: 14px; 
+  font-weight: 500;
+  cursor: pointer; 
+  transition: all 0.2s; 
+}
+.wp-chip:hover:not(:disabled) { background: rgba(99, 102, 241, 0.1); border-color: rgba(99, 102, 241, 0.3); color: #fff; transform: translateY(-2px); }
+
+/* ─── FAB Button ──────────────────────────────── */
 .widget-fab {
-  width: 60px;
-  height: 60px;
-  border-radius: 30px;
-  background: var(--accent);
-  color: white;
+  width: 72px;
+  height: 72px;
+  border-radius: 24px;
+  background: #6366f1;
+  color: #fff;
   border: none;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 28px;
+  font-size: 32px;
   cursor: pointer;
-  box-shadow: 0 10px 25px rgba(124, 92, 255, 0.5);
-  transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+  box-shadow: 0 12px 32px rgba(99, 102, 241, 0.4);
+  transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
   position: relative;
 }
+.widget-fab:hover { transform: scale(1.1) rotate(5deg); }
 
-.widget-fab:hover {
-  transform: translateY(-4px) scale(1.05);
-  box-shadow: 0 14px 30px rgba(124, 92, 255, 0.6);
-}
+.widget-fab.fab-open { background: #18181b; border: 1px solid rgba(255,255,255,0.1); transform: rotate(0); }
 
-.widget-fab.open {
-  background: rgba(255, 255, 255, 0.1);
-  border: 1px solid var(--border);
-  box-shadow: 0 4px 12px rgba(0,0,0,0.2);
-  transform: rotate(90deg);
-}
+.widget-fab.fab-hearing { background: #f43f5e; box-shadow: 0 0 40px rgba(244, 63, 94, 0.6); }
+.widget-fab.fab-listening { background: #3b82f6; box-shadow: 0 0 32px rgba(59, 130, 246, 0.6); }
+.widget-fab.fab-thinking { background: #f59e0b; }
+.widget-fab.fab-speaking { background: #10b981; box-shadow: 0 0 40px rgba(16, 185, 129, 0.6); }
 
-.widget-fab.hearing {
-  transform: scale(1.1);
-  box-shadow: 0 0 30px rgba(251, 113, 133, 0.8);
-  background: #fb7185;
-}
-
-/* Voice Mode Colors */
-.widget-fab.voice-mode.vm-listening {
-  background: #3b82f6; /* Blue for listening */
-  box-shadow: 0 0 25px rgba(59, 130, 246, 0.6);
-}
-.widget-fab.voice-mode.vm-thinking {
-  background: #f59e0b; /* Yellow for thinking */
-  box-shadow: 0 0 25px rgba(245, 158, 11, 0.6);
-}
-.widget-fab.voice-mode.vm-speaking {
-  background: #10b981; /* Green for speaking */
-  box-shadow: 0 0 35px rgba(16, 185, 129, 0.8);
-}
-
-.fab-icon {
-  position: relative;
-  z-index: 2;
-  transition: transform 0.3s;
-}
-
-.widget-fab.open .fab-icon {
-  transform: rotate(-90deg);
-  font-size: 24px;
-}
-
-/* Pulses */
 .fab-pulse {
   position: absolute;
-  top: 0; left: 0; right: 0; bottom: 0;
-  border-radius: 50%;
-  background: var(--accent);
-  z-index: 1;
+  inset: -8px;
+  border-radius: 30px;
+  background: inherit;
+  opacity: 0.4;
+  z-index: -1;
   animation: fab-pulse 2s infinite;
 }
-.fab-pulse.hearing-pulse { background: #fb7185; animation: hearing-pulse 0.8s infinite alternate; }
-.fab-pulse.vm-pulse-listen { background: #3b82f6; animation: vm-pulse-listen 1.5s infinite; }
-.fab-pulse.vm-pulse-think { background: #f59e0b; animation: vm-pulse-think 1s infinite alternate; }
-.fab-pulse.vm-pulse-speak { background: #10b981; animation: vm-pulse-speak 1s infinite cubic-bezier(0.4, 0, 0.2, 1); }
-
-@keyframes hearing-pulse { 0% { transform: scale(1); opacity: 0.8; } 100% { transform: scale(1.4); opacity: 0.2; } }
-@keyframes vm-pulse-listen { 0% { transform: scale(1); opacity: 0.6; } 100% { transform: scale(1.8); opacity: 0; } }
-@keyframes vm-pulse-think { 0% { transform: scale(1) rotate(0deg); opacity: 0.8; } 100% { transform: scale(1.2) rotate(180deg); opacity: 0.2; } }
-@keyframes vm-pulse-speak { 0% { transform: scale(1); opacity: 0.8; } 50% { transform: scale(1.5); opacity: 0.4; } 100% { transform: scale(1); opacity: 0.8; } }
-
-@keyframes fab-pulse { 0% { transform: scale(1); opacity: 0.6; } 100% { transform: scale(1.6); opacity: 0; } }
+@keyframes fab-pulse { 0% { transform: scale(1); opacity: 0.4; } 100% { transform: scale(1.6); opacity: 0; } }
 
 .fab-label {
   position: absolute;
-  right: 75px;
-  background: var(--card);
-  padding: 6px 12px;
-  border-radius: 8px;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text);
-  border: 1px solid var(--border);
+  right: 88px;
+  background: #18181b;
+  color: #fff;
+  padding: 8px 16px;
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: 700;
+  border: 1px solid rgba(255,255,255,0.1);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+  pointer-events: none;
   opacity: 0;
-  visibility: hidden;
-  transition: all 0.2s;
-  white-space: nowrap;
+  transform: translateX(10px);
+  transition: all 0.3s;
 }
+.widget-fab:hover .fab-label { opacity: 1; transform: translateX(0); }
 
-.widget-fab:hover .fab-label {
-  opacity: 1;
-  visibility: visible;
-  right: 80px;
+/* ─── Transitions ─────────────────────────────── */
+.widget-slide-enter-active, .widget-slide-leave-active,
+.fade-up-enter-active, .fade-up-leave-active {
+  transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
 }
-
-/* ─── Quick Suggestions ──────────────────────── */
-.wp-wake-hint {
-  font-size: 12px;
-  color: var(--muted);
-  margin: 4px 0 12px;
-  opacity: 0.7;
-}
-
-.wp-suggestions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 4px;
-  justify-content: center;
-}
-
-.wp-chip {
-  background: rgba(124, 92, 255, 0.1);
-  border: 1px solid rgba(124, 92, 255, 0.3);
-  color: var(--accent);
-  padding: 6px 14px;
-  border-radius: 20px;
-  font-size: 13px;
-  cursor: pointer;
-  transition: all 0.2s;
-  font-family: inherit;
-}
-
-.wp-chip:hover:not(:disabled) {
-  background: rgba(124, 92, 255, 0.25);
-  border-color: var(--accent);
-  transform: translateY(-1px);
-}
-
-.wp-chip:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
+.widget-slide-enter-from, .widget-slide-leave-to,
+.fade-up-enter-from, .fade-up-leave-to {
+  opacity: 0;
+  transform: translateY(40px) scale(0.9);
+  filter: blur(10px);
 }
 </style>
