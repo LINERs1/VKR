@@ -1,0 +1,77 @@
+HTML и CSS — основы веб-разработки
+
+HTML (HyperText Markup Language) — язык разметки для создания структуры веб-страниц.
+
+Базовая структура HTML-документа:
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Моя страница</title>
+</head>
+<body>
+    <h1>Заголовок страницы</h1>
+    <p>Абзац текста</p>
+</body>
+</html>
+
+Основные HTML-теги:
+- <h1>–<h6> — заголовки (h1 главный, h6 самый мелкий)
+- <p> — абзац
+- <a href="url"> — ссылка
+- <img src="image.jpg" alt="описание"> — изображение
+- <ul>/<ol> + <li> — маркированный/нумерованный список
+- <div> — блочный контейнер
+- <span> — строчный контейнер
+- <form>, <input>, <button> — элементы формы
+- <table>, <tr>, <td> — таблица
+- <header>, <nav>, <main>, <footer>, <section>, <article> — семантические теги
+
+CSS (Cascading Style Sheets) — язык стилей для оформления HTML.
+
+Способы подключения CSS:
+1. Внешний файл: <link rel="stylesheet" href="style.css">
+2. Внутри HTML: <style> ... </style>
+3. Инлайн: <p style="color: red;">
+
+Селекторы CSS:
+p { }           /* По тегу */
+.class-name { } /* По классу */
+#id-name { }    /* По id */
+p.active { }    /* Комбинация */
+div > p { }     /* Дочерний элемент */
+
+Основные свойства CSS:
+color: #333;
+background-color: #fff;
+font-size: 16px;
+font-family: Arial, sans-serif;
+margin: 10px;        /* Внешний отступ */
+padding: 10px;       /* Внутренний отступ */
+border: 1px solid #ccc;
+width: 100%;
+height: 50px;
+display: flex;
+position: relative;
+
+Flexbox — современный способ выравнивания:
+.container {
+    display: flex;
+    justify-content: center;   /* По горизонтали */
+    align-items: center;       /* По вертикали */
+    gap: 10px;                 /* Расстояние между элементами */
+    flex-wrap: wrap;           /* Перенос строки */
+}
+
+CSS Grid — сетка для сложных макетов:
+.grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 20px;
+}
+
+Адаптивный дизайн (media queries):
+@media (max-width: 768px) {
+    .grid { grid-template-columns: 1fr; }
+}

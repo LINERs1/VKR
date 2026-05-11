@@ -1,0 +1,87 @@
+Функции и ООП в Python
+
+Функции:
+Функция — именованный блок кода, который можно вызывать многократно.
+
+def greet(name, greeting="Привет"):
+    """Функция приветствия. greeting имеет значение по умолчанию."""
+    return f"{greeting}, {name}!"
+
+result = greet("Иван")           # "Привет, Иван!"
+result2 = greet("Анна", "Добрый день")  # "Добрый день, Анна!"
+
+Лямбда-функции (анонимные):
+square = lambda x: x ** 2
+square(5)  # 25
+
+Управляющие конструкции:
+if age >= 18:
+    print("Совершеннолетний")
+elif age >= 14:
+    print("Подросток")
+else:
+    print("Ребёнок")
+
+Циклы:
+for i in range(5):       # 0, 1, 2, 3, 4
+    print(i)
+
+for fruit in ["яблоко", "банан"]:
+    print(fruit)
+
+i = 0
+while i < 5:
+    print(i)
+    i += 1
+
+break — прерывает цикл
+continue — переходит к следующей итерации
+
+Объектно-ориентированное программирование (ООП):
+Класс — шаблон для создания объектов.
+
+class Student:
+    def __init__(self, name, age):
+        self.name = name
+        self.age = age
+        self.grades = []
+
+    def add_grade(self, grade):
+        self.grades.append(grade)
+
+    def average_grade(self):
+        if not self.grades:
+            return 0
+        return sum(self.grades) / len(self.grades)
+
+    def __str__(self):
+        return f"Студент {self.name}, {self.age} лет"
+
+# Создание объекта
+ivan = Student("Иван", 20)
+ivan.add_grade(5)
+ivan.add_grade(4)
+print(ivan.average_grade())  # 4.5
+print(ivan)  # Студент Иван, 20 лет
+
+Наследование:
+class GraduateStudent(Student):
+    def __init__(self, name, age, thesis_topic):
+        super().__init__(name, age)
+        self.thesis_topic = thesis_topic
+
+Принципы ООП:
+- Инкапсуляция: скрытие деталей реализации
+- Наследование: дочерний класс наследует свойства родительского
+- Полиморфизм: разные классы могут иметь методы с одинаковым именем
+
+Обработка исключений:
+try:
+    number = int(input("Введите число: "))
+    result = 10 / number
+except ValueError:
+    print("Ошибка: введите целое число")
+except ZeroDivisionError:
+    print("Ошибка: деление на ноль")
+finally:
+    print("Программа завершена")

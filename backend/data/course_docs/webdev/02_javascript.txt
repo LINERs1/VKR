@@ -1,0 +1,76 @@
+JavaScript — язык программирования для веба
+
+JavaScript (JS) — язык программирования, который делает веб-страницы интерактивными. Выполняется прямо в браузере.
+
+Переменные (ES6+):
+let name = "Иван";      // Можно переприсвоить
+const PI = 3.14;        // Нельзя переприсвоить
+var old = "устарело";   // Старый способ, избегайте
+
+Функции:
+// Обычная функция
+function greet(name) {
+    return `Привет, ${name}!`;
+}
+
+// Стрелочная функция (arrow function)
+const greet = (name) => `Привет, ${name}!`;
+
+// Асинхронная функция
+async function fetchData(url) {
+    const response = await fetch(url);
+    const data = await response.json();
+    return data;
+}
+
+Работа с DOM:
+document.getElementById('myId')
+document.querySelector('.my-class')
+document.querySelectorAll('p')
+
+element.textContent = "Новый текст";
+element.innerHTML = "<strong>HTML</strong>";
+element.style.color = "red";
+element.classList.add('active');
+element.classList.remove('active');
+element.classList.toggle('active');
+
+Обработка событий:
+button.addEventListener('click', function(event) {
+    console.log('Кнопка нажата!', event);
+});
+
+input.addEventListener('input', (e) => {
+    console.log(e.target.value);
+});
+
+Массивы и методы:
+const numbers = [1, 2, 3, 4, 5];
+numbers.map(x => x * 2)        // [2, 4, 6, 8, 10]
+numbers.filter(x => x > 2)     // [3, 4, 5]
+numbers.reduce((acc, x) => acc + x, 0)  // 15
+numbers.find(x => x > 3)       // 4
+numbers.some(x => x > 4)       // true
+numbers.every(x => x > 0)      // true
+
+Промисы и fetch:
+fetch('/api/users')
+    .then(response => response.json())
+    .then(data => console.log(data))
+    .catch(error => console.error(error));
+
+// С async/await (предпочтительно)
+try {
+    const res = await fetch('/api/users');
+    const data = await res.json();
+} catch (err) {
+    console.error(err);
+}
+
+Деструктуризация:
+const { name, age } = person;
+const [first, second, ...rest] = array;
+
+Спред-оператор:
+const newArr = [...arr1, ...arr2];
+const newObj = { ...obj1, extra: "value" };

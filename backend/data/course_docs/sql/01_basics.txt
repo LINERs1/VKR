@@ -1,0 +1,80 @@
+Основы SQL и реляционных баз данных
+
+База данных (БД) — организованное хранилище данных. SQL (Structured Query Language) — язык для работы с реляционными БД.
+
+Популярные СУБД: PostgreSQL, MySQL, SQLite, Microsoft SQL Server.
+
+Основные операции (CRUD):
+CREATE — создание
+READ — чтение
+UPDATE — обновление
+DELETE — удаление
+
+Создание таблицы:
+CREATE TABLE students (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name VARCHAR(100) NOT NULL,
+    age INTEGER,
+    email VARCHAR(200) UNIQUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+Вставка данных:
+INSERT INTO students (name, age, email)
+VALUES ('Иван Петров', 20, 'ivan@example.com');
+
+SELECT запросы:
+-- Все записи
+SELECT * FROM students;
+
+-- Конкретные столбцы
+SELECT name, age FROM students;
+
+-- С условием
+SELECT * FROM students WHERE age > 18;
+
+-- Сортировка
+SELECT * FROM students ORDER BY age DESC;
+
+-- Ограничение количества
+SELECT * FROM students LIMIT 10;
+
+-- Поиск по шаблону
+SELECT * FROM students WHERE name LIKE 'Ив%';
+
+Обновление и удаление:
+UPDATE students SET age = 21 WHERE id = 1;
+DELETE FROM students WHERE id = 1;
+
+Агрегатные функции:
+SELECT COUNT(*) FROM students;           -- Количество строк
+SELECT AVG(age) FROM students;          -- Среднее
+SELECT MAX(age), MIN(age) FROM students; -- Максимум и минимум
+SELECT SUM(score) FROM grades;          -- Сумма
+
+GROUP BY:
+SELECT department, COUNT(*), AVG(salary)
+FROM employees
+GROUP BY department
+HAVING COUNT(*) > 5;
+
+JOIN — объединение таблиц:
+-- INNER JOIN: только совпадающие записи
+SELECT s.name, g.subject, g.grade
+FROM students s
+INNER JOIN grades g ON s.id = g.student_id;
+
+-- LEFT JOIN: все из левой + совпадения из правой
+SELECT s.name, g.grade
+FROM students s
+LEFT JOIN grades g ON s.id = g.student_id;
+
+Индексы — ускорение поиска:
+CREATE INDEX idx_student_email ON students(email);
+-- Индексы ускоряют SELECT, но замедляют INSERT/UPDATE
+
+Транзакции:
+BEGIN;
+UPDATE accounts SET balance = balance - 1000 WHERE id = 1;
+UPDATE accounts SET balance = balance + 1000 WHERE id = 2;
+COMMIT; -- или ROLLBACK при ошибке
