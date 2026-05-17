@@ -1,14 +1,17 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import CourseCard from '../components/CourseCard.vue'
+import { apiFetch } from '../api'
+import { useAuth } from '../composables/useAuth'
 
+const { user, fetchUser, logout } = useAuth()
 const courses = ref([])
 const loading = ref(true)
 
 onMounted(async () => {
   try {
-    const res = await fetch('/api/courses')
-    courses.value = await res.json()
+    await fetchUser()
+    courses.value = await apiFetch('/courses')
   } catch (e) {
     console.error(e)
   } finally {
@@ -21,16 +24,21 @@ onMounted(async () => {
   <div class="home-page">
     <!-- HERO -->
     <section class="hero">
-      <div class="hero-bg">
-        <div class="hero-orb orb1"></div>
-        <div class="hero-orb orb2"></div>
-        <div class="hero-orb orb3"></div>
-      </div>
+      <!-- No hero-bg orbs to prevent GPU crashes -->
       <nav class="home-nav">
         <div class="nav-logo">🎓 EduAI</div>
         <a href="#courses" class="nav-link">Курсы</a>
         <a href="#how" class="nav-link">Как работает</a>
         <a href="/api/health" target="_blank" class="nav-badge">API ✓</a>
+
+        <div class="user-profile" v-if="user">
+          <span class="user-role" v-if="user.role === 'teacher'">Преподаватель</span>
+          <span class="user-name">{{ user.username }}</span>
+          <router-link to="/journal" class="nav-badge" style="background: rgba(245,158,11,0.2); color: #f59e0b;" v-if="user.role === 'teacher'">Журнал</router-link>
+          <router-link to="/profile" class="nav-badge" style="background: rgba(99,102,241,0.2); color: #818cf8;">Профиль</router-link>
+          <router-link to="/homeworks" class="nav-badge" style="background: rgba(52,211,153,0.2); color: #34d399;">ДЗ</router-link>
+          <button @click="logout" class="btn-logout">Выйти</button>
+        </div>
       </nav>
       <div class="hero-content">
         <div class="hero-pill">
@@ -169,12 +177,11 @@ onMounted(async () => {
 .hero-orb {
   position: absolute;
   border-radius: 50%;
-  filter: blur(80px);
   opacity: 0.4;
 }
-.orb1 { width: 400px; height: 400px; background: var(--accent); top: -100px; left: -100px; }
-.orb2 { width: 300px; height: 300px; background: var(--accent2); top: 20%; right: -50px; }
-.orb3 { width: 250px; height: 250px; background: #fb7185; bottom: -50px; left: 30%; }
+.orb1 { width: 400px; height: 400px; background: radial-gradient(circle, var(--accent) 0%, transparent 70%); top: -100px; left: -100px; }
+.orb2 { width: 300px; height: 300px; background: radial-gradient(circle, var(--accent2) 0%, transparent 70%); top: 20%; right: -50px; }
+.orb3 { width: 250px; height: 250px; background: radial-gradient(circle, #fb7185 0%, transparent 70%); bottom: -50px; left: 30%; }
 
 /* ─── Navigation ─────────────────────────────── */
 .home-nav {
@@ -186,7 +193,6 @@ onMounted(async () => {
   border: 1px solid var(--border);
   border-radius: 100px;
   margin-bottom: 80px;
-  backdrop-filter: blur(12px);
   z-index: 10;
 }
 
@@ -214,6 +220,48 @@ onMounted(async () => {
   text-decoration: none;
   font-size: 13px;
   font-weight: 600;
+}
+
+.user-profile {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: auto;
+  padding-left: 20px;
+  border-left: 1px solid var(--border);
+}
+
+.user-role {
+  font-size: 11px;
+  text-transform: uppercase;
+  background: rgba(245, 158, 11, 0.2);
+  color: #fbbf24;
+  padding: 4px 8px;
+  border-radius: 100px;
+  font-weight: 700;
+}
+
+.user-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.btn-logout {
+  background: rgba(244, 63, 94, 0.1);
+  color: #f43f5e;
+  border: 1px solid rgba(244, 63, 94, 0.2);
+  padding: 6px 14px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-logout:hover {
+  background: #f43f5e;
+  color: #fff;
 }
 
 /* ─── Hero Content ───────────────────────────── */
@@ -245,9 +293,8 @@ onMounted(async () => {
 }
 
 @keyframes pulse-dot {
-  0% { box-shadow: 0 0 0 0 rgba(45, 212, 191, 0.4); }
-  70% { box-shadow: 0 0 0 8px rgba(45, 212, 191, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(45, 212, 191, 0); }
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
 }
 
 .hero-title {

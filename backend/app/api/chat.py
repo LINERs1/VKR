@@ -16,9 +16,33 @@ from app.services.rag_service import (
     format_history,
 )
 from app.services.tts_service import synthesize_speech
+from app.models.user import User
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# На главной (default) RAG по коллекции часто подмешивает случайные чанки (в т.ч. «приветствия») —
+# модель начинает их повторять. Там достаточно списка курсов из промпта.
+_GLOBAL_HOME_CONTEXT = (
+    "Ты на главной странице платформы. "
+    "На привет и «как дела?» отвечай по-человечески своими словами, не зеркаль вопрос. "
+    "Переход на страницу курса — только после явного согласия пользователя на твой вопрос «подходит? перевести?»; "
+    "на первую просьбу «переведи/открой курс» тег [NAVIGATE:/courses/…] не ставь. "
+    "Переход на главную по просьбе — можно сразу [NAVIGATE:/]."
+)
+
+
+async def retrieve_context_for_chat(message: str, course_id: str):
+    if course_id == settings.DEFAULT_COURSE_ID:
+        return [], _GLOBAL_HOME_CONTEXT, []
+    retriever = get_retriever(course_id)
+    source_docs = await retriever.ainvoke(message)
+    sources = list(
+        {doc.metadata.get("source", "") for doc in source_docs if doc.metadata.get("source")}
+    )
+    context = format_docs(source_docs)
+    return source_docs, context, sources
+
 
 # Регулярка для NAVIGATE-тегов
 _NAV_RE = re.compile(r'\[NAVIGATE:([^\]]+)\]')
@@ -106,19 +130,15 @@ async def stream_rag_response(
     course_id: str,
     course_name: str,
     page_context: dict = {},
+    current_user: User = None
 ) -> AsyncIterator[str]:
     try:
-        retriever = get_retriever(course_id)
-        source_docs = await retriever.ainvoke(message)
-        sources = list(
-            {doc.metadata.get("source", "") for doc in source_docs if doc.metadata.get("source")}
-        )
+        _docs, context, sources = await retrieve_context_for_chat(message, course_id)
 
         yield f"data: {json.dumps({'type': 'sources', 'content': sources})}\n\n"
 
-        context = format_docs(source_docs)
         history_text = format_history([m.model_dump() for m in history])
-        chain = get_chain(course_name, course_id, page_context)
+        chain = get_chain(course_name, course_id, page_context, current_user)
 
         async for event_type, content in _stream_tokens(
             chain, {"context": context, "question": message, "history": history_text}
@@ -132,17 +152,29 @@ async def stream_rag_response(
         yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
     except Exception as e:
+        err_str = str(e)
         logger.error(f"Chat stream error: {e}")
-        yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
+        if '503' in err_str or 'UNAVAILABLE' in err_str or 'high demand' in err_str:
+            msg = 'Gemini API сейчас перегружен. Подождите 10-30 секунд и повторите запрос.'
+        else:
+            msg = f'Ошибка: {err_str}'
+        yield f"data: {json.dumps({'type': 'error', 'content': msg})}\n\n"
 
+
+from fastapi import APIRouter, HTTPException, Depends
+from fastapi.responses import StreamingResponse, Response
+from app.services.auth_service import get_current_user_optional
+from app.models.user import User
 
 @router.post("/chat/stream")
-async def chat_stream(request: ChatRequest):
+async def chat_stream(request: ChatRequest, current_user: User = Depends(get_current_user_optional)):
+    # pass user info into rag service later
     return StreamingResponse(
         stream_rag_response(
             request.message, request.history,
             request.course_id, request.course_name,
-            request.page_context
+            request.page_context,
+            current_user
         ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
@@ -159,23 +191,20 @@ async def stream_rag_voice_response(
     course_id: str,
     course_name: str,
     page_context: dict = {},
+    current_user: User = None
 ) -> AsyncIterator[str]:
     try:
-        retriever = get_retriever(course_id)
-        source_docs = await retriever.ainvoke(message)
-        sources = list(
-            {doc.metadata.get("source", "") for doc in source_docs if doc.metadata.get("source")}
-        )
+        _docs, context, sources = await retrieve_context_for_chat(message, course_id)
 
         yield f"data: {json.dumps({'type': 'sources', 'content': sources})}\n\n"
 
-        context = format_docs(source_docs)
         history_text = format_history([m.model_dump() for m in history])
-        chain = get_chain(course_name, course_id, page_context)
+        chain = get_chain(course_name, course_id, page_context, current_user)
 
         sentence_buffer = ""
-        # Паттерн конца предложения
+        # Конец предложения ИЛИ запятая/точка с запятой при буфере > 35 символов (живее ритм речи)
         sentence_end_re = re.compile(r'([.!?]+[\s\n]+|[.!?]+$|\n{2,})')
+        comma_re = re.compile(r'([,;]\s+)')
 
         async for event_type, content in _stream_tokens(
             chain, {"context": context, "question": message, "history": history_text}
@@ -184,8 +213,12 @@ async def stream_rag_voice_response(
                 yield f"data: {json.dumps({'type': 'token', 'content': content})}\n\n"
                 sentence_buffer += content
 
-                # Ищем конец предложения
+                # Проверяем конец предложения
                 match = sentence_end_re.search(sentence_buffer)
+                if not match and len(sentence_buffer) > 35:
+                    # При длинном буфере разрезаем по запятой/точке с запятой
+                    match = comma_re.search(sentence_buffer)
+
                 if match:
                     end_idx = match.end()
                     sentence = sentence_buffer[:end_idx].strip()
@@ -211,17 +244,23 @@ async def stream_rag_voice_response(
         yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
     except Exception as e:
+        err_str = str(e)
         logger.exception("Chat voice stream error:")
-        yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
+        if '503' in err_str or 'UNAVAILABLE' in err_str or 'high demand' in err_str:
+            msg = 'Gemini API сейчас перегружен. Пожалуйста, повторите через несколько секунд.'
+        else:
+            msg = f'Ошибка: {err_str}'
+        yield f"data: {json.dumps({'type': 'error', 'content': msg})}\n\n"
 
 
 @router.post("/chat/voice")
-async def chat_voice(request: ChatRequest):
+async def chat_voice(request: ChatRequest, current_user: User = Depends(get_current_user_optional)):
     return StreamingResponse(
         stream_rag_voice_response(
             request.message, request.history,
             request.course_id, request.course_name,
-            request.page_context
+            request.page_context,
+            current_user
         ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
@@ -235,14 +274,9 @@ async def chat_voice(request: ChatRequest):
 @router.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
     try:
-        retriever = get_retriever(request.course_id)
-        source_docs = await retriever.ainvoke(request.message)
-        sources = list(
-            {doc.metadata.get("source", "") for doc in source_docs if doc.metadata.get("source")}
-        )
-        context = format_docs(source_docs)
+        _docs, context, sources = await retrieve_context_for_chat(request.message, request.course_id)
         history_text = format_history([m.model_dump() for m in request.history])
-        chain = get_chain(request.course_name, request.course_id)
+        chain = get_chain(request.course_name, request.course_id, request.page_context)
         answer = await chain.ainvoke(
             {"context": context, "question": request.message, "history": history_text}
         )

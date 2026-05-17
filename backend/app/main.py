@@ -4,8 +4,15 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import chat, documents, widget, courses
+from app.api import chat, documents, widget, courses, stt, auth, homework, ultravox
 from app.config import settings
+from app.database import Base, engine, SessionLocal
+import app.models.homework # Ensure models are loaded
+import app.models.user
+import app.models.course
+
+# Initialize database
+Base.metadata.create_all(bind=engine)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -17,25 +24,27 @@ async def lifespan(app: FastAPI):
     logger.info(f"🤖 LLM:  {settings.LLM_PROVIDER} / {settings.LLM_MODEL}")
     logger.info(f"🔊 TTS:  {settings.TTS_PROVIDER} / {settings.TTS_VOICE}")
     logger.info(f"🌐 CORS: {settings.cors_origins}")
-    # Auto-ingest demo course materials on startup
-    _auto_ingest_courses()
+    # Auto-seed database and ingest course materials on startup
+    with SessionLocal() as db:
+        from app.utils.seed import seed_database
+        seed_database(db)
+        _auto_ingest_courses_from_db(db)
     yield
     logger.info("Shutting down...")
 
 
-def _auto_ingest_courses():
-    """Automatically index demo course materials if files exist."""
-    from pathlib import Path
-    from app.services.rag_service import ingest_documents
-    course_ids = ["python", "ml", "webdev", "sql"]
-    for course_id in course_ids:
-        course_dir = Path(f"./data/course_docs/{course_id}")
-        if course_dir.exists() and any(course_dir.iterdir()):
-            try:
-                result = ingest_documents(str(course_dir), course_id)
-                logger.info(f"Auto-ingest [{course_id}]: {result}")
-            except Exception as e:
-                logger.warning(f"Auto-ingest [{course_id}] failed: {e}")
+def _auto_ingest_courses_from_db(db):
+    """Automatically index course materials from SQLite database."""
+    from app.services.rag_service import ingest_documents_from_db
+    from app.models.course import Course
+    
+    courses = db.query(Course).all()
+    for course in courses:
+        try:
+            result = ingest_documents_from_db(course, db)
+            logger.info(f"Auto-ingest [{course.id}]: {result}")
+        except Exception as e:
+            logger.warning(f"Auto-ingest [{course.id}] failed: {e}")
 
 
 app = FastAPI(
@@ -57,6 +66,10 @@ app.include_router(chat.router,      prefix="/api", tags=["chat"])
 app.include_router(documents.router, prefix="/api", tags=["documents"])
 app.include_router(widget.router,    prefix="/api", tags=["widget"])
 app.include_router(courses.router,   prefix="/api", tags=["courses"])
+app.include_router(stt.router,       prefix="/api", tags=["stt"])
+app.include_router(auth.router,      prefix="/api/auth", tags=["auth"])
+app.include_router(homework.router,  prefix="/api/homework", tags=["homework"])
+app.include_router(ultravox.router,  prefix="/api/ultravox", tags=["ultravox"])
 
 
 @app.get("/api/health")

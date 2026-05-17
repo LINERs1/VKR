@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     # Облачные ключи API
     # =========================================================
     OPENAI_API_KEY: str = ""
-    GEMINI_API_KEY: str = "AIzaSyCCBgJFt76lSsz_AT6Uty6WUzRvPi478Ss"
+    GEMINI_API_KEY: str = ""  # только из .env / окружения, не коммить ключи
     OLLAMA_BASE_URL: str = "http://localhost:11434"
 
     # =========================================================
@@ -46,6 +46,14 @@ class Settings(BaseSettings):
     # XTTS v2 (Better Cloning)
     XTTS_VOICE_REF: str = "./voices/reference.wav"  # Тот же файл для клонирования
     XTTS_MODEL_PATH: str = "./models/xtts_v2"       # Папка для модели XTTS
+
+    # =========================================================
+    # Ultravox (Cloud Voice AI)
+    # =========================================================
+    ULTRAVOX_API_KEY: str = ""          # API ключ с app.ultravox.ai
+    ULTRAVOX_VOICE_ID: str = ""         # ID голоса (Voices в консоли)
+    ULTRAVOX_MODEL: str = "ultravox-v0.7"  # Модель для звонка — см. GET /api/ultravox/models
+    BACKEND_PUBLIC_URL: str = "http://localhost:8000"  # Публичный URL бэкенда (ngrok для разработки)
 
     # =========================================================
     # Assistant identity

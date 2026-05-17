@@ -67,7 +67,9 @@ function startListening() {
   recognition.onend   = () => { isListening.value = false }
   recognition.onerror = (e) => {
     isListening.value = false
-    if (e.error !== 'no-speech') errorText.value = `Ошибка распознавания: ${e.error}`
+    // network / aborted — краткие сбои Chromium к облачному STT, не показываем
+    if (e.error === 'no-speech' || e.error === 'network' || e.error === 'aborted') return
+    errorText.value = `Ошибка распознавания: ${e.error}`
   }
   recognition.onresult = (e) => {
     const transcript = Array.from(e.results)
@@ -306,7 +308,6 @@ function clearHistory() { history.value = []; errorText.value = '' }
   box-shadow: 0 10px 40px -10px rgba(0,0,0,0.5);
   overflow: hidden;
   z-index: 9000;
-  backdrop-filter: blur(10px);
 }
 
 .widget-slide-enter-active,

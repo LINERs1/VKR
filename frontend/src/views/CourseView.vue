@@ -1,5 +1,6 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
+import { marked } from 'marked'
 import { useRoute, useRouter } from 'vue-router'
 
 const route = useRoute()
@@ -77,20 +78,10 @@ async function indexServerDir() {
   }
 }
 
-// Simple markdown-to-html renderer
+// Use marked for safe and fast markdown rendering
 function renderContent(text) {
   if (!text) return ''
-  return text
-    .replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>')
-    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-    .replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>')
-    .replace(/^### (.*)/gm, '<h3>$1</h3>')
-    .replace(/^## (.*)/gm, '<h2>$1</h2>')
-    .replace(/^# (.*)/gm, '<h1>$1</h1>')
-    .replace(/^- (.*)/gm, '<li>$1</li>')
-    .replace(/(<li>.*<\/li>)/gs, '<ul>$1</ul>')
-    .replace(/\n{2,}/g, '</p><p>')
-    .replace(/^(?!<[huplo])/gm, '')
+  return marked.parse(text)
 }
 </script>
 
@@ -219,8 +210,7 @@ function renderContent(text) {
   align-items: center;
   padding: 0 24px;
   height: 64px;
-  background: rgba(15, 23, 42, 0.8);
-  backdrop-filter: blur(12px);
+  background: rgba(15, 23, 42, 0.95);
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
   z-index: 100;
 }

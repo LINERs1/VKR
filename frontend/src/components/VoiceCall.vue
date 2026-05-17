@@ -87,9 +87,8 @@ function initRecognition() {
   }
   
   recognition.onerror = (e) => {
-    if (e.error !== 'no-speech') {
-        errorMsg.value = `Ошибка: ${e.error}`
-    }
+    if (e.error === 'no-speech' || e.error === 'network' || e.error === 'aborted') return
+    errorMsg.value = `Ошибка: ${e.error}`
   }
 
   // Barge-in (перебивание)

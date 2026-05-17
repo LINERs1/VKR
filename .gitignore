@@ -1,8 +1,11 @@
 # Python
 backend/.venv/
-backend/__pycache__/
-backend/*.pyc
+**/__pycache__/
+**/*.pyc
 backend/.env
+backend/app.db
+backend/scripts/.tunnel.pid
+tools/
 backend/chroma_db/
 backend/voices/*.mp3
 backend/voices/*.wav
@@ -19,3 +22,7 @@ frontend/.vscode/
 .DS_Store
 Thumbs.db
 *.log
+*.bak
+frontend/src/components/*.py
+frontend/src/components/*.script.txt
+frontend/src/debugger.js
