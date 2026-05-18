@@ -21,6 +21,7 @@ async function loadCourse(id) {
     if (!res.ok) { router.push('/'); return }
     course.value = await res.json()
     currentLesson.value = course.value.lessons[0]
+    publishLessonContext()
   } catch (e) {
     router.push('/')
   } finally {
@@ -34,15 +35,45 @@ watch(() => route.params.id, (newId) => {
   if (newId) loadCourse(newId)
 })
 
+watch(
+  () => route.query.lesson,
+  (lessonId) => {
+    if (!course.value || lessonId == null || lessonId === '') return
+    const id = Number(lessonId)
+    const lesson = course.value.lessons?.find((l) => l.id === id)
+    if (lesson) currentLesson.value = lesson
+  },
+)
+
 const currentIdx = computed(() =>
   course.value ? course.value.lessons.findIndex(l => l.id === currentLesson.value?.id) : -1
 )
 const hasPrev = computed(() => currentIdx.value > 0)
 const hasNext = computed(() => currentIdx.value < (course.value?.lessons.length ?? 0) - 1)
 
+function publishLessonContext() {
+  if (!course.value || !currentLesson.value) return
+  const idx = currentIdx.value >= 0 ? currentIdx.value : 0
+  window.currentCourseLessonContext = {
+    courseId: course.value.id,
+    lessonId: currentLesson.value.id,
+    lessonTitle: currentLesson.value.title,
+    lessonIndex: idx + 1,
+    totalLessons: course.value.lessons.length,
+  }
+  window.currentCourseLessons = (course.value.lessons || []).map((l) => ({
+    id: l.id,
+    title: l.title,
+    courseId: course.value.id,
+  }))
+  window.dispatchEvent(new CustomEvent('eduai-lesson-changed'))
+}
+
 function selectLesson(lesson) { currentLesson.value = lesson }
 function prevLesson() { if (hasPrev.value) currentLesson.value = course.value.lessons[currentIdx.value - 1] }
 function nextLesson() { if (hasNext.value) currentLesson.value = course.value.lessons[currentIdx.value + 1] }
+
+watch(currentLesson, () => publishLessonContext(), { flush: 'post' })
 
 function onFilesChange(e) { selectedFiles.value = e.target.files }
 

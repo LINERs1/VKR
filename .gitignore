@@ -4,6 +4,7 @@ backend/.venv/
 **/*.pyc
 backend/.env
 backend/app.db
+docker/compose.env
 backend/scripts/.tunnel.pid
 tools/
 backend/chroma_db/

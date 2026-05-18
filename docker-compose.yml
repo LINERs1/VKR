@@ -1,0 +1,38 @@
+# EduAI: фронт (nginx :8080) + бэкенд (:8000).
+# Ollama — на хосте (Windows/WSL): запустите `ollama serve` и скачанные модели будут использоваться.
+# Запуск: docker compose up --build
+#
+# Бэкенд ходит в Ollama по host.docker.internal:11434 (см. docker/compose.env).
+# На Linux без Docker Desktop может понадобиться: extra_hosts уже задан для backend.
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file:
+      - ./docker/compose.env
+    environment:
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:8080,http://127.0.0.1:8080}
+      SQLITE_DATABASE_PATH: ${SQLITE_DATABASE_PATH:-/data/app.db}
+      CHROMA_PERSIST_DIR: ${CHROMA_PERSIST_DIR:-/data/chroma_db}
+    volumes:
+      - diplom_data:/data
+    ports:
+      - "8000:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: /api
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+
+volumes:
+  diplom_data:

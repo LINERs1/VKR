@@ -6,8 +6,10 @@ class Settings(BaseSettings):
     # =========================================================
     # LLM — меняй только эти две строки для смены модели
     # =========================================================
-    LLM_PROVIDER: str = "gemini"        # "openai" | "gemini"
-    LLM_MODEL: str = "gemini-2.5-flash" # "gpt-4o-mini" для openai | "gemini-2.5-flash" для gemini
+    LLM_PROVIDER: str = "gemini"        # "openai" | "gemini" | "ollama"
+    LLM_MODEL: str = "gemini-2.5-flash" # чат и RAG — быстрая модель
+    # Проверка ДЗ (пусто = как LLM_MODEL). Для ollama: qwen2.5:14b, mistral-nemo, …
+    HOMEWORK_REVIEW_MODEL: str = ""
 
     # =========================================================
     # Облачные ключи API
@@ -21,6 +23,9 @@ class Settings(BaseSettings):
     # =========================================================
     EMBEDDING_PROVIDER: str = "gemini"  # "openai" | "gemini"
     EMBEDDING_MODEL: str = "models/gemini-embedding-001"
+
+    # SQLite (Docker: SQLITE_DATABASE_PATH=/data/app.db + volume)
+    SQLITE_DATABASE_PATH: str = "./app.db"
 
     # =========================================================
     # ChromaDB
@@ -51,17 +56,18 @@ class Settings(BaseSettings):
     # Ultravox (Cloud Voice AI)
     # =========================================================
     ULTRAVOX_API_KEY: str = ""          # API ключ с app.ultravox.ai
-    ULTRAVOX_VOICE_ID: str = ""         # ID голоса (Voices в консоли)
+    ULTRAVOX_VOICE_ID: str = "d616943f-cf3e-44e3-9de6-336aaaec86c5"
+    ULTRAVOX_VOICE_SPEED: float = 0.85  # Скорость речи TTS: 1.0 = норма, 0.85 ≈ на 15% медленнее (ElevenLabs: 0.7–1.2)
     ULTRAVOX_MODEL: str = "ultravox-v0.7"  # Модель для звонка — см. GET /api/ultravox/models
     BACKEND_PUBLIC_URL: str = "http://localhost:8000"  # Публичный URL бэкенда (ngrok для разработки)
 
     # =========================================================
     # Assistant identity
     # =========================================================
-    ASSISTANT_NAME: str = "EduAI"
+    ASSISTANT_NAME: str = "Кортана"
     COURSE_NAME: str = "Образовательный курс"
     DEFAULT_COURSE_ID: str = "default"
-    ASSISTANT_GREETING: str = "Привет! Я ваш учебный ассистент. Задайте вопрос по материалам курса."
+    ASSISTANT_GREETING: str = "Привет! Я Кортана. Чем могу помочь?"
 
     # =========================================================
     # CORS — через запятую

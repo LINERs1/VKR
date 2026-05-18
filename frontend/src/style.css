@@ -14,6 +14,14 @@
 
 body { margin: 0; }
 
+/* Отступ под Dynamic Island во время голосового звонка */
+html.eduai-voice-active .course-page {
+  padding-top: 8px;
+}
+html.eduai-voice-active.island-expanded-page .course-header {
+  margin-top: 56px;
+}
+
 #app { min-height: 100vh; }
 
 /* ─── Layout ─────────────────────────────────── */

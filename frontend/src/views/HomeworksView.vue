@@ -8,9 +8,12 @@
         В профиль
       </button>
       <h2>Домашние задания</h2>
-      <button v-if="isTeacher" class="create-btn" @click="showModal = true">
-        + Создать ДЗ
-      </button>
+      <div v-if="isTeacher" class="header-actions">
+        <button class="workshop-btn" @click="$router.push('/homeworks/workshop')">
+          Мастерская
+        </button>
+        <button class="create-btn" @click="showModal = true">+ Создать ДЗ</button>
+      </div>
     </header>
 
     <main class="list-container">
@@ -27,12 +30,13 @@
         >
           <div class="hw-top">
             <span class="course-badge">{{ hw.course_id }}</span>
+            <span v-if="hw.is_demo" class="demo-badge">Пример</span>
             <span v-if="!isTeacher" class="status-badge" :class="getMyStatus(hw)">
               {{ formatStatus(getMyStatus(hw)) }}
             </span>
           </div>
           <h3 class="hw-title">{{ hw.title }}</h3>
-          <p class="hw-desc">{{ hw.description.substring(0, 60) }}...</p>
+          <p class="hw-desc">{{ excerpt(hw.description) }}</p>
           <div v-if="isTeacher" class="hw-stats">
             Назначено ученикам: {{ hw.assignments?.length || 0 }}
           </div>
@@ -147,6 +151,12 @@ function formatStatus(status) {
   return status
 }
 
+function excerpt(text) {
+  const t = (text || '').replace(/\s+/g, ' ').trim()
+  if (!t) return '—'
+  return t.length > 72 ? t.slice(0, 72) + '…' : t
+}
+
 async function handleCreate() {
   if (!newHw.value.student_ids.length) return alert('Выберите хотя бы одного ученика!')
   creating.value = true
@@ -181,6 +191,12 @@ async function handleCreate() {
   background: none; border: none; color: #a1a1aa; cursor: pointer;
 }
 .back-btn:hover { color: #fff; }
+.header-actions { display: flex; gap: 10px; align-items: center; }
+.workshop-btn {
+  background: #27272a; color: #e4e4e7; border: 1px solid #3f3f46;
+  padding: 10px 16px; border-radius: 8px; cursor: pointer; font-weight: 500;
+}
+.workshop-btn:hover { border-color: #6366f1; color: #fff; }
 .create-btn {
   background: #4f46e5; color: white; border: none; padding: 10px 16px;
   border-radius: 8px; cursor: pointer; font-weight: 500;
@@ -205,10 +221,19 @@ async function handleCreate() {
   border-color: rgba(99,102,241,0.5);
 }
 .hw-top {
-  display: flex; justify-content: space-between; margin-bottom: 12px;
+  display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;
+  flex-wrap: wrap; gap: 8px;
 }
 .course-badge {
   background: #27272a; padding: 4px 8px; border-radius: 6px; font-size: 12px; color: #a1a1aa;
+}
+.demo-badge {
+  background: rgba(99, 102, 241, 0.2);
+  color: #a5b4fc;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
 }
 .status-badge {
   padding: 4px 8px; border-radius: 6px; font-size: 12px; font-weight: 600;

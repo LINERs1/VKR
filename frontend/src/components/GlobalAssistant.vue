@@ -2,9 +2,12 @@
 import { ref, nextTick, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { UltravoxSession } from 'ultravox-client'
+import { useAuth } from '../composables/useAuth'
+import { hwApi } from '../api'
 
 const route = useRoute()
 const router = useRouter()
+const { user, fetchUser } = useAuth()
 
 // ─── Page & Course Context ────────────────────────────────────────────────
 const courseId   = ref('default')
@@ -12,6 +15,20 @@ const courseName = ref('EduAI')
 const courseIcon = ref('🤖')
 const currentPage = ref('home')
 const allCourses  = ref([])
+const homeworkReminder = ref('')
+
+async function loadHomeworkReminders() {
+  try {
+    const u = user.value || (await fetchUser())
+    if (!u) return
+    const r = await hwApi.getReminders()
+    const active =
+      u.role === 'teacher'
+        ? (r.pending_review_count || r.not_submitted_count)
+        : (r.pending_count || r.waiting_count)
+    if (active && r.message) homeworkReminder.value = r.message
+  } catch (_) {}
+}
 
 async function loadAllCourses() {
   try {
@@ -20,11 +37,105 @@ async function loadAllCourses() {
   } catch (e) {}
 }
 
+function getActiveLessonContext() {
+  const ctx = window.currentCourseLessonContext
+  if (!ctx || !courseId.value || ctx.courseId !== courseId.value) return null
+  return ctx
+}
+
+function quizLetterForVoice(oi) {
+  return String.fromCharCode(65 + oi)
+}
+
+function formatHomeworkPageText(hw) {
+  const lines = [`Домашнее задание: ${hw.title}`]
+  if (hw.intro) {
+    lines.push('', 'УСЛОВИЕ:', hw.intro)
+  }
+  if (hw.codeTemplate) {
+    lines.push('', `ШАБЛОН КОДА (${hw.codeFilename || 'solution.py'}):`, hw.codeTemplate)
+  }
+  const items = hw.quizItems || []
+  if (items.length) {
+    lines.push('', 'ТЕСТОВАЯ ЧАСТЬ (вопросы с вариантами):')
+    items.forEach((q, qi) => {
+      lines.push(`${qi + 1}. ${q.question}`)
+      ;(q.options || []).forEach((opt, oi) => {
+        lines.push(`   ${quizLetterForVoice(oi)}) ${opt}`)
+      })
+      if (q.correct_index != null && q.options?.[q.correct_index] != null) {
+        lines.push(`   Верный вариант: ${quizLetterForVoice(q.correct_index)}) ${q.options[q.correct_index]}`)
+      }
+    })
+  }
+  if (hw.writtenPart) {
+    lines.push('', 'ПИСЬМЕННАЯ ЧАСТЬ ЗАДАНИЯ:', hw.writtenPart)
+  }
+  const a = hw.assignment
+  if (a) {
+    lines.push('', `--- Ответ ученика (${a.student}, статус: ${a.status}) ---`)
+    if (a.status === 'graded' && a.grade != null) {
+      lines.push(`ОЦЕНКА: ${a.grade} из 5`)
+      const fb = a.teacher_feedback
+        ? stripHtmlForSpeech(a.teacher_feedback).slice(0, 600)
+        : ''
+      if (fb) lines.push('ОТЗЫВ ПРЕПОДАВАТЕЛЯ:', fb)
+    }
+    lines.push('', 'КОД УЧЕНИКА:', a.code || '(нет)')
+    if (items.length) {
+      lines.push('', 'ОТВЕТЫ УЧЕНИКА НА ТЕСТЫ:')
+      items.forEach((q, qi) => {
+        const picked = a.quiz?.[String(qi)] ?? a.quiz?.[qi]
+        const pickStr =
+          picked != null && q.options?.[picked] != null
+            ? `${quizLetterForVoice(picked)}) ${q.options[picked]}`
+            : '(не выбрано)'
+        lines.push(`${qi + 1}. ${pickStr}`)
+      })
+    }
+    lines.push('', 'ПИСЬМЕННАЯ ЧАСТЬ УЧЕНИКА:', a.text || '(нет)')
+  }
+  return lines.join('\n')
+}
+
 function getPageText() {
   try {
-    const mainEl = document.querySelector('main') || document.querySelector('#app') || document.body
-    return (mainEl.innerText || '').slice(0, 1500)
+    const hw = window.currentHomeworkContext
+    if (hw && route.path.startsWith('/homeworks/')) {
+      return formatHomeworkPageText(hw).slice(0, 2200)
+    }
+
+    const lessonEl =
+      document.querySelector('.course-content .content-wrapper') ||
+      document.querySelector('.course-content') ||
+      document.querySelector('main')
+    const el = lessonEl || document.querySelector('#app') || document.body
+    return (el.innerText || '').slice(0, 1500)
   } catch (e) { return '' }
+}
+
+function lessonContextFields() {
+  const lesson = getActiveLessonContext()
+  if (!lesson) return {}
+  return {
+    lesson_id: lesson.lessonId,
+    lesson_title: lesson.lessonTitle,
+    lesson_index: lesson.lessonIndex,
+    total_lessons: lesson.totalLessons,
+  }
+}
+
+function homeworkContextFields() {
+  const hw = window.currentHomeworkContext
+  if (!hw?.assignment || !route.path.startsWith('/homeworks/')) return {}
+  const a = hw.assignment
+  return {
+    homework_id: hw.homeworkId ?? null,
+    assignment_id: a.id,
+    assignment_student: a.student,
+    assignment_status: a.status,
+    assignment_grade: a.grade ?? null,
+  }
 }
 
 const pageContext = computed(() => ({
@@ -32,6 +143,7 @@ const pageContext = computed(() => ({
   current_page: currentPage.value,
   current_course_id:   courseId.value !== 'default' ? courseId.value : null,
   current_course_name: courseId.value !== 'default' ? courseName.value : null,
+  ...lessonContextFields(),
   available_courses: allCourses.value.map(c => ({
     id: c.id, title: c.title, icon: c.icon || '', description: c.description || ''
   }))
@@ -72,6 +184,9 @@ watch(() => [route.path, route.params.id], async ([newPath, newId]) => {
     courseId.value    = 'default'
     courseName.value  = 'EduAI'
     courseIcon.value  = '🤖'
+    window.currentCourseLessonContext = null
+  } else if (!newPath.startsWith('/courses/')) {
+    window.currentCourseLessonContext = null
   } else {
     currentPage.value = 'Неизвестная страница'
     courseId.value    = 'default'
@@ -79,6 +194,16 @@ watch(() => [route.path, route.params.id], async ([newPath, newId]) => {
     courseIcon.value  = '🤖'
   }
 }, { immediate: true })
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('eduai-homework-context', () => {
+    if (route.path.startsWith('/homeworks/')) {
+      courseId.value = window.currentHomeworkContext?.courseId || 'default'
+      courseName.value = window.currentHomeworkContext?.title || 'Домашнее задание'
+      if (voiceMode.value) scheduleVoicePageContextPush(200, true)
+    }
+  })
+}
 
 // ─── Text Chat State ───────────────────────────────────────────────────────
 const isOpen    = ref(false)
@@ -118,12 +243,48 @@ const isHearingSpeech    = ref(false)
 // Ultravox session
 let uvSession = null
 let uvStatusCleanup = null
+let voiceSessionId = null
+let voiceContextTimer = null
+let lastPushedVoiceContextKey = ''
+let voiceHistorySyncedOrdinals = new Set()
+const VOICE_VOLUME_KEY = 'eduai_voice_volume'
+const voiceVolume = ref(parseFloat(localStorage.getItem(VOICE_VOLUME_KEY) || '0.45'))
+const voiceVolumePct = computed({
+  get: () => Math.round(voiceVolume.value * 100),
+  set: (v) => { voiceVolume.value = Math.max(0, Math.min(1, Number(v) / 100)) },
+})
 let lastVoiceNavPath = null
 let voiceUserHasSpoken = false
 let pendingNavPath = null
 
 const STATIC_NAV_PATHS = ['/', '/profile', '/journal', '/homeworks']
 const VOICE_YES_RE = /\b(да|давай|ок|окей|конечно|переводи|открывай|хорошо|ага|угу)\b/ui
+const HIDDEN_VOICE_CTX_RE = /^\[СИСТЕМА:\s*обновление контекста/i
+
+/** Служебные sendText при смене страницы/урока — не показывать в sub-island */
+function isHiddenVoiceContextMessage(text) {
+  const t = (text || '').trim()
+  if (!t) return false
+  if (HIDDEN_VOICE_CTX_RE.test(t)) return true
+  if (t.startsWith('Пользователь сейчас здесь:') && t.includes('Содержимое экрана')) return true
+  return false
+}
+
+function isAutoContextTranscript(entry) {
+  if (!entry || entry.speaker !== 'user') return false
+  if (entry.medium === 'text' && isHiddenVoiceContextMessage(entry.text)) return true
+  return isHiddenVoiceContextMessage(entry.text)
+}
+
+function lastVisibleUserTranscript(transcripts) {
+  for (let i = transcripts.length - 1; i >= 0; i--) {
+    const entry = transcripts[i]
+    if (entry.speaker === 'user' && !isAutoContextTranscript(entry)) {
+      return (entry.text || '').trim()
+    }
+  }
+  return ''
+}
 
 function stripNavFromSpeech(text) {
   if (!text) return ''
@@ -135,20 +296,99 @@ function stripNavFromSpeech(text) {
     .trim()
 }
 
+function lastVisibleAgentTranscript(transcripts) {
+  for (let i = transcripts.length - 1; i >= 0; i--) {
+    const entry = transcripts[i]
+    if (entry.speaker === 'agent' && entry.text && !isHiddenVoiceContextMessage(entry.text)) {
+      return stripNavFromSpeech(entry.text)
+    }
+  }
+  return ''
+}
+
+function normalizeNavPath(rawPath) {
+  if (rawPath === undefined || rawPath === null) return null
+  let path = String(rawPath).trim()
+  if (path.includes('?')) path = path.split('?')[0]
+  if (!path || /^(home|главная|главную|main)$/i.test(path)) return '/'
+  if (!path.startsWith('/')) path = `/${path}`
+  return path.replace(/\/+$/, '') || '/'
+}
+
+function parseNavTarget(rawPath) {
+  const raw = String(rawPath || '').trim()
+  if (!raw) return null
+  let pathname = raw
+  let query = {}
+  if (raw.includes('?')) {
+    const idx = raw.indexOf('?')
+    pathname = raw.slice(0, idx)
+    query = Object.fromEntries(new URLSearchParams(raw.slice(idx + 1)))
+  }
+  const path = resolveNavigatePath(pathname)
+  if (!path) return null
+  return Object.keys(query).length ? { path, query } : { path }
+}
+
 function extractNavPathFromText(raw) {
   if (!raw) return null
+  const tag = raw.match(/\[NAVIGATE:\s*([^\]]*)\]/i)
+  if (tag) return normalizeNavPath(tag[1])
+
+  if (/\bnavigate\s+(?:to\s+)?home\b/i.test(raw)) return '/'
+
   const patterns = [
-    /\[NAVIGATE:\s*([^\]]+)\]/i,
-    /\bNAVIGATE\s*:?\s*(\/[^\s\],.]+)/i,
-    /\bnavigate\s+(?:to\s+)?(\/courses\/[^\s\],.]+)/i,
+    /\bNAVIGATE\s*:?\s*(\/[^\s\],.]*)/i,
+    /\bnavigate\s+(?:to\s+)?(\/(?:courses\/[^\s\],.]+|profile|journal|homeworks)?)/i,
     /\bnavigate\s+(?:to\s+)?courses\/([a-z0-9_-]+)/i,
   ]
   for (const re of patterns) {
     const m = raw.match(re)
     if (!m) continue
-    let p = m[1].trim()
+    let p = (m[1] || '').trim()
+    if (!p) return '/'
     if (!p.startsWith('/')) p = `/courses/${p}`
-    return p
+    return normalizeNavPath(p)
+  }
+  return null
+}
+
+/** Явная просьба перейти на статическую страницу (без тега от модели). */
+function detectStaticNavInText(text) {
+  if (!text) return null
+  const lower = text.toLowerCase()
+  const wantsNav = /перейд|перевед|открой|покаж|выведи|верни|направь|хочу на|можно на|давай на/i.test(lower)
+  if (!wantsNav) return null
+  if (/главн|домой|\bhome\b/i.test(lower)) return '/'
+  if (/профил/i.test(lower)) return '/profile'
+  if (/журнал/i.test(lower)) return '/journal'
+  if (/домашн/i.test(lower)) return '/homeworks'
+  return null
+}
+
+function detectLessonPathInText(text) {
+  if (!text) return null
+  const lower = text.toLowerCase()
+  const courses = allCourses.value || []
+
+  const onCourse = route.path.match(/^\/courses\/([^/?#]+)/)
+  if (onCourse) {
+    const c = courses.find((x) => x.id === onCourse[1])
+    for (const l of c?.lessons || []) {
+      const lt = (l.title || '').toLowerCase()
+      if (lt.length > 4 && lower.includes(lt)) {
+        return `/courses/${c.id}?lesson=${l.id}`
+      }
+    }
+  }
+
+  for (const c of courses) {
+    for (const l of c.lessons || []) {
+      const lt = (l.title || '').toLowerCase()
+      if (lt.length > 4 && lower.includes(lt)) {
+        return `/courses/${c.id}?lesson=${l.id}`
+      }
+    }
   }
   return null
 }
@@ -188,10 +428,8 @@ function detectCourseOfferInText(text) {
 }
 
 function resolveNavigatePath(rawPath) {
-  if (!rawPath) return null
-  let path = String(rawPath).trim()
-  if (!path.startsWith('/')) path = `/${path}`
-  path = path.replace(/\/+$/, '') || '/'
+  const path = normalizeNavPath(rawPath)
+  if (!path) return null
 
   if (STATIC_NAV_PATHS.includes(path)) return path
 
@@ -228,27 +466,376 @@ function resolveNavigatePath(rawPath) {
 }
 
 function tryVoiceNavigate(rawPath) {
-  const path = resolveNavigatePath(rawPath)
-  if (!path) {
+  const target = parseNavTarget(rawPath)
+  if (!target) {
     console.warn('[nav] неизвестный путь:', rawPath)
     return false
   }
 
-  // Не навигировать на главную из приветствия (до реплики пользователя)
-  if (!voiceUserHasSpoken && path === '/') return false
-
+  const targetPath = (target.path || '/').replace(/\/+$/, '') || '/'
   const current = (route.path || '/').replace(/\/+$/, '') || '/'
-  const target = path.replace(/\/+$/, '') || '/'
-  if (current === target) {
+  const samePath = current === targetPath
+  const sameLesson =
+    !target.query?.lesson || String(route.query.lesson || '') === String(target.query.lesson)
+
+  if (samePath && sameLesson) {
     pendingNavPath = null
+    scheduleVoicePageContextPush(300, true)
     return true
   }
 
-  if (path === lastVoiceNavPath) return true
-  lastVoiceNavPath = path
+  if (String(rawPath) === lastVoiceNavPath) return true
+  lastVoiceNavPath = String(rawPath)
   pendingNavPath = null
-  router.push(path)
+  router.push(target)
+  scheduleVoicePageContextPush(700, true)
   return true
+}
+
+function voiceContextKey() {
+  const lesson = getActiveLessonContext()
+  const lessonPart = lesson ? `|lesson:${lesson.lessonId}` : ''
+  return `${route.path}|${courseId.value}|${currentPage.value}${lessonPart}`
+}
+
+function buildVoiceContextMessage() {
+  const pageText = getPageText()
+  const cid = courseId.value || 'default'
+  const cname = courseName.value || 'EduAI'
+  const lesson = getActiveLessonContext()
+  const lessonBlock = lesson
+    ? `- Текущий урок: «${lesson.lessonTitle}» (${lesson.lessonIndex} из ${lesson.totalLessons}, lesson_id: ${lesson.lessonId})\n`
+    : ''
+  const lessonsList = window.currentCourseLessons || []
+  const lessonsBlock =
+    lessonsList.length && route.path.startsWith('/courses/')
+      ? `- Уроки на экране: ${lessonsList.map((l) => `«${l.title}» (lesson_id: ${l.id})`).join('; ')}\n`
+      : ''
+  const hw = window.currentHomeworkContext
+  const quizCount = hw?.quizItems?.length || 0
+  const st = hw?.assignment?.status
+  const gradeHint =
+    st === 'graded' && hw.assignment.grade != null
+      ? `, оценка: ${hw.assignment.grade} из 5`
+      : ''
+  const reviewRule =
+    st === 'graded'
+      ? `- Работа УЖЕ ОЦЕНЕНА${hw.assignment.grade != null ? ` (${hw.assignment.grade} из 5)` : ''}. НЕ вызывай reviewHomework — повторная ИИ-проверка не нужна. Отвечай по оценке и отзыву из контекста ниже.\n`
+      : st === 'submitted'
+        ? `- Работа сдана, ждёт проверки. Для ИИ-проверки вызови reviewHomework один раз; проверка на сервере может занять до нескольких минут — попроси пользователя подождать, не говори про зависание.\n`
+        : `- Работа не в статусе «на проверке»; reviewHomework не вызывай.\n`
+  const hwBlock =
+    hw?.assignment && route.path.startsWith('/homeworks/')
+      ? `- Домашнее задание: «${hw.title}», ученик: ${hw.assignment.student}, assignment_id: ${hw.assignment.id}, статус: ${hw.assignment.status}${gradeHint}${quizCount ? `, тестов: ${quizCount}` : ''}\n- На экране есть код, тестовая часть (MCQ) и письменный ответ — см. содержимое ниже.\n${reviewRule}`
+      : hw && route.path.startsWith('/homeworks/') && !hw.assignment
+        ? `- Домашнее задание: «${hw.title}»${quizCount ? `, тестов: ${quizCount}` : ''}. Для подсказки без готового решения — getHomeworkHint.\n`
+        : hw && route.path.startsWith('/homeworks/')
+          ? `- Домашнее задание: «${hw.title}»${quizCount ? `, тестов: ${quizCount}` : ''}. Выберите ученика или откройте форму ответа.\n`
+          : ''
+  return `[СИСТЕМА: обновление контекста страницы]
+Пользователь сейчас здесь:
+- Страница: ${currentPage.value}
+- URL: ${route.path}
+- Курс: ${cname} (course_id: ${cid})
+${lessonBlock}${lessonsBlock}${hwBlock}- Для queryKnowledgeBase используй course_id: ${cid}
+- Для списка несданных ДЗ — getHomeworkReminders
+
+Содержимое экрана (активный урок):
+"""
+${pageText}
+"""`
+}
+
+function stripHtmlForSpeech(html) {
+  return String(html || '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+async function runVoiceRagQuery(params) {
+  const query =
+    (typeof params === 'string' ? params : null) ??
+    params?.query ??
+    params?.parameters?.query ??
+    params?.args?.query
+  if (!query?.trim()) return 'Нужен поисковый запрос по материалам курса.'
+  try {
+    const token = localStorage.getItem('token')
+    const headers = { 'Content-Type': 'application/json' }
+    if (token) headers['Authorization'] = `Bearer ${token}`
+    const res = await fetch('/api/ultravox/rag', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        query: query.trim(),
+        course_id: courseId.value,
+        session_id: voiceSessionId,
+      }),
+    })
+    if (!res.ok) throw new Error(await res.text())
+    const data = await res.json()
+    return data.results || 'Информация по запросу не найдена в материалах курса.'
+  } catch (e) {
+    return `Ошибка поиска в материалах: ${e.message || e}.`
+  }
+}
+
+async function runVoiceHomeworkReview() {
+  const u = user.value || (await fetchUser())
+  if (u?.role !== 'teacher') {
+    return 'Проверка домашних заданий доступна только преподавателю.'
+  }
+  const hw = window.currentHomeworkContext
+  const assignmentId = hw?.assignment?.id
+  if (!assignmentId || !route.path.startsWith('/homeworks/')) {
+    return 'Откройте страницу домашнего задания и выберите ученика в списке слева, затем попросите проверить снова.'
+  }
+  const status = hw.assignment.status
+  if (status === 'graded') {
+    const g = hw.assignment.grade
+    return (
+      `Работа ученика ${hw.assignment.student} уже оценена${g != null ? ` на ${g} из 5` : ''}. ` +
+      `Повторную ИИ-проверку не запускаю — оценка и отзыв уже на экране. ` +
+      `Чтобы пересчитать отзыв ИИ, нажмите на странице кнопку «Проверить с ИИ (Кортана)».`
+    )
+  }
+  if (status !== 'submitted') {
+    return `У ученика ${hw.assignment.student} ещё нет сданной работы для проверки.`
+  }
+
+  const studentName = hw.assignment.student
+  voiceState.value = 'THINKING'
+
+  void (async () => {
+    try {
+      const result = await hwApi.aiReviewHomework(assignmentId)
+      window.dispatchEvent(
+        new CustomEvent('eduai-homework-reviewed', {
+          detail: {
+            assignmentId,
+            teacher_feedback: result.teacher_feedback,
+            suggested_grade: result.suggested_grade,
+            error_fragments: result.error_fragments || [],
+          },
+        })
+      )
+      const gradeLine =
+        result.suggested_grade != null ? `Предлагаемая оценка: ${result.suggested_grade} из 5. ` : ''
+      const spoken = stripHtmlForSpeech(result.teacher_feedback).slice(0, 500)
+      if (uvSession) {
+        try {
+          uvSession.sendText(
+            `[СИСТЕМА: ИИ-проверка для ученика ${studentName} завершена. ${gradeLine}` +
+              `На экране обновлены отзыв и подсветка ошибок. Озвучь пользователю кратко по-русски (1–3 предложения), без HTML. Текст отзыва: ${spoken}]`,
+            true
+          )
+        } catch (_) {}
+      }
+    } catch (e) {
+      const msg = e?.message || String(e)
+      if (uvSession) {
+        try {
+          uvSession.sendText(
+            `[СИСТЕМА: ИИ-проверка не выполнена: ${msg}. Скажи пользователю по-русски коротко: проверка не удалась, можно повторить позже или нажать «Проверить с ИИ» на странице. Упомяни при необходимости запуск Ollama.]`,
+            true
+          )
+        } catch (_) {}
+      }
+    }
+  })()
+
+  return (
+    'Проверка ДЗ только что запущена в фоне (ответ инструмента приходит сразу, а сама нейросеть считает дольше). ' +
+    'Скажи пользователю по-русски одной-двумя фразами: сейчас идёт автоматическая проверка ответа ученика, обычно это занимает от 30 секунд до двух–трёх минут — попроси спокойно подождать и не завершать голосовой разговор. ' +
+    'Категорически не говори, что приложение или система зависли, пропала связь или произошёл сбой — это нормальное ожидание тяжёлого запроса. ' +
+    'Когда проверка закончится, ты получишь отдельное служебное сообщение с результатом для озвучки.'
+  )
+}
+
+async function runTeacherSummary() {
+  const u = user.value || (await fetchUser())
+  if (u?.role !== 'teacher') return 'Сводка журнала доступна только преподавателю.'
+  try {
+    const s = await hwApi.getJournalSummary()
+    const courseLines = (s.courses || [])
+      .filter((c) => c.avg_grade != null || c.pending_review || c.not_submitted)
+      .slice(0, 5)
+      .map(
+        (c) =>
+          `${c.course_title}: средний ${c.avg_grade ?? '—'}, не сдано ${c.not_submitted}, на проверке ${c.pending_review}`
+      )
+    const notSubmitted = (s.not_submitted || [])
+      .slice(0, 5)
+      .map((x) => `${x.student_name} — «${x.homework_title}»`)
+    const pending = (s.pending_review || [])
+      .slice(0, 5)
+      .map((x) => `${x.student_name} — «${x.homework_title}»`)
+
+    let out = `Средний балл по журналу: ${s.overall_avg ?? 'нет оценок'}. `
+    out += `На проверке ${s.pending_review_count}, не сдано ${s.not_submitted_count}. `
+    if (courseLines.length) out += `По курсам: ${courseLines.join('; ')}. `
+    if (notSubmitted.length) out += `Не сдали: ${notSubmitted.join(', ')}. `
+    if (pending.length) out += `Ждут проверки: ${pending.join(', ')}. `
+    return out.trim()
+  } catch (e) {
+    return `Не удалось получить сводку: ${e.message || e}.`
+  }
+}
+
+async function runVoiceReminders() {
+  try {
+    const r = await hwApi.getReminders()
+    if (r.role === 'teacher') {
+      const pending = (r.pending_review || [])
+        .slice(0, 5)
+        .map((x) => `${x.student_name}, «${x.title}»`)
+      const ns = (r.not_submitted || [])
+        .slice(0, 5)
+        .map((x) => `${x.student_name}, «${x.title}»`)
+      let msg = r.message || ''
+      if (pending.length) msg += ` На проверке: ${pending.join('; ')}.`
+      if (ns.length) msg += ` Не сдано: ${ns.join('; ')}.`
+      return msg.trim() || 'Все задания в порядке.'
+    }
+    const pending = (r.pending || []).map((x) => `«${x.title}» (${x.course_title})`)
+    const waiting = (r.waiting || []).map((x) => `«${x.title}»`)
+    let msg = r.message || ''
+    if (pending.length) msg += ` Не сдано: ${pending.join(', ')}.`
+    if (waiting.length) msg += ` На проверке: ${waiting.join(', ')}.`
+    return msg.trim() || 'Все домашние задания сданы.'
+  } catch (e) {
+    return `Не удалось загрузить напоминания: ${e.message || e}.`
+  }
+}
+
+async function runVoiceHomeworkHint() {
+  const u = user.value || (await fetchUser())
+  if (u?.role !== 'student') return 'Подсказки по ДЗ доступны ученику на странице задания.'
+  const my = window.currentHomeworkContext?.assignment
+  if (!my?.id || !route.path.startsWith('/homeworks/')) {
+    return 'Откройте домашнее задание, которое ещё не сдали, и попросите подсказку снова.'
+  }
+  if (my.status !== 'pending') {
+    return 'Подсказки доступны только до отправки работы на проверку.'
+  }
+  try {
+    voiceState.value = 'THINKING'
+    const res = await hwApi.getHomeworkHint(my.id, {
+      student_code: my.code ?? window.currentHomeworkContext?.assignment?.code,
+      student_text: my.text ?? window.currentHomeworkContext?.assignment?.text,
+      student_quiz: my.quiz ?? window.currentHomeworkContext?.assignment?.quiz,
+    })
+    window.dispatchEvent(
+      new CustomEvent('eduai-homework-hint', { detail: { assignmentId: my.id, hint: res.hint } })
+    )
+    return res.hint
+  } catch (e) {
+    return `Не удалось получить подсказку: ${e.message || e}.`
+  }
+}
+
+async function syncVoicePageContext() {
+  if (!voiceSessionId) return
+  const token = localStorage.getItem('token')
+  const headers = { 'Content-Type': 'application/json' }
+  if (token) headers['Authorization'] = `Bearer ${token}`
+  try {
+    await fetch('/api/ultravox/context', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        session_id: voiceSessionId,
+        course_id: courseId.value,
+        course_name: courseName.value,
+        current_page: currentPage.value,
+        current_path: route.path,
+        page_content: getPageText(),
+        ...lessonContextFields(),
+        ...homeworkContextFields(),
+      }),
+    })
+  } catch (e) {
+    console.warn('[voice context] sync failed', e)
+  }
+}
+
+function applyVoiceVolumeOnce() {
+  const vol = Math.max(0, Math.min(1, voiceVolume.value))
+  localStorage.setItem(VOICE_VOLUME_KEY, String(vol))
+
+  const el = uvSession?.audioElement
+  if (el) {
+    el.volume = vol
+    el.muted = vol < 0.02
+  }
+
+  try {
+    document.querySelectorAll('audio').forEach((a) => {
+      a.volume = vol
+      a.muted = vol < 0.02
+    })
+  } catch {}
+
+  try {
+    uvSession?.room?.remoteParticipants?.forEach((p) => {
+      p.audioTrackPublications?.forEach((pub) => {
+        const t = pub.track || pub.audioTrack
+        if (t && typeof t.setVolume === 'function') t.setVolume(vol)
+      })
+    })
+  } catch {}
+}
+
+function applyVoiceVolume() {
+  applyVoiceVolumeOnce()
+}
+
+function burstApplyVoiceVolume() {
+  applyVoiceVolumeOnce()
+  for (const ms of [400, 1000, 2000]) setTimeout(applyVoiceVolumeOnce, ms)
+}
+
+function normalizeSources(sources) {
+  if (!Array.isArray(sources)) return []
+  return sources.map(s => (typeof s === 'string' ? s : (s?.title || s?.file_name || String(s))))
+}
+
+function syncVoiceTranscriptsToHistory() {
+  const transcripts = (uvSession?.transcripts || []).filter(Boolean)
+  let added = false
+  for (const t of transcripts) {
+    if (t.ordinal == null || voiceHistorySyncedOrdinals.has(t.ordinal)) continue
+    if (!t.isFinal) continue
+    if (t.speaker === 'user' && isAutoContextTranscript(t)) continue
+    const raw = t.text || ''
+    if (t.speaker === 'agent' && isHiddenVoiceContextMessage(raw)) continue
+
+    const role = t.speaker === 'user' ? 'user' : 'assistant'
+    const content = role === 'assistant' ? stripNavFromSpeech(raw).trim() : raw.trim()
+    if (!content) continue
+
+    voiceHistorySyncedOrdinals.add(t.ordinal)
+    history.value.push({ role, content, sources: [] })
+    added = true
+  }
+  if (added && isOpen.value) scrollBottom()
+}
+
+function scheduleVoicePageContextPush(delay = 450, force = false) {
+  if (!voiceMode.value) return
+  clearTimeout(voiceContextTimer)
+  voiceContextTimer = setTimeout(async () => {
+    await syncVoicePageContext()
+    const key = voiceContextKey()
+    if (!force && key === lastPushedVoiceContextKey) return
+    lastPushedVoiceContextKey = key
+    try {
+      if (uvSession) uvSession.sendText(buildVoiceContextMessage(), true)
+    } catch (e) {
+      console.warn('[voice context] sendText failed', e)
+    }
+  }, delay)
 }
 
 // ─── Ultravox helpers ─────────────────────────────────────────────────────
@@ -262,6 +849,9 @@ async function startUltravoxSession() {
 
     if (!allCourses.value.length) await loadAllCourses()
 
+    voiceSessionId = crypto.randomUUID()
+    lastPushedVoiceContextKey = ''
+
     const token = localStorage.getItem('token')
     const headers = { 'Content-Type': 'application/json' }
     if (token) headers['Authorization'] = `Bearer ${token}`
@@ -270,6 +860,7 @@ async function startUltravoxSession() {
       method: 'POST',
       headers,
       body: JSON.stringify({
+        session_id: voiceSessionId,
         course_id: courseId.value,
         course_name: courseName.value,
         current_page: currentPage.value,
@@ -285,10 +876,21 @@ async function startUltravoxSession() {
       })
     })
     if (!res.ok) throw new Error(await res.text())
-    const { joinUrl } = await res.json()
+    const data = await res.json()
+    const joinUrl = data.joinUrl
+    if (data.sessionId) voiceSessionId = data.sessionId
+
+    voiceHistorySyncedOrdinals = new Set()
 
     uvSession = new UltravoxSession()
+    uvSession.registerToolImplementation('getPageContext', () => buildVoiceContextMessage())
+    uvSession.registerToolImplementation('queryKnowledgeBase', (params) => runVoiceRagQuery(params))
+    uvSession.registerToolImplementation('reviewHomework', () => runVoiceHomeworkReview())
+    uvSession.registerToolImplementation('getTeacherSummary', () => runTeacherSummary())
+    uvSession.registerToolImplementation('getHomeworkReminders', () => runVoiceReminders())
+    uvSession.registerToolImplementation('getHomeworkHint', () => runVoiceHomeworkHint())
     await uvSession.joinCall(joinUrl)
+    burstApplyVoiceVolume()
 
     // Слушаем статус сессии
     uvSession.addEventListener('status', (e) => {
@@ -305,34 +907,56 @@ async function startUltravoxSession() {
         voiceState.value = 'SPEAKING'
         isHearingSpeech.value = false
       }
+      burstApplyVoiceVolume()
     })
 
-    // Слушаем транскрипт пользователя
+    // Слушаем транскрипт (служебные sendText при навигации в UI не показываем)
     uvSession.addEventListener('transcripts', (e) => {
       const transcripts = uvSession.transcripts
       if (!transcripts || !transcripts.length) return
       const last = transcripts[transcripts.length - 1]
+
       if (last.speaker === 'user') {
+        if (isAutoContextTranscript(last)) {
+          const visible = lastVisibleUserTranscript(transcripts)
+          if (visible) voiceTranscript.value = visible
+          syncVoiceTranscriptsToHistory()
+          return
+        }
         voiceUserHasSpoken = true
         voiceTranscript.value = last.text
         const userText = (last.text || '').trim()
         if (VOICE_YES_RE.test(userText) && pendingNavPath) {
           tryVoiceNavigate(pendingNavPath)
+      } else {
+          const userNav = detectStaticNavInText(userText)
+          if (userNav) tryVoiceNavigate(userNav)
         }
       } else if (last.speaker === 'agent') {
         const raw = last.text || ''
+        if (isHiddenVoiceContextMessage(raw)) return
         const display = stripNavFromSpeech(raw)
         voiceAssistantText.value = display
         lastAssistantText.value = display
 
-        const navPath = extractNavPathFromText(raw)
+        let navPath = extractNavPathFromText(raw)
+        if (!navPath) navPath = detectLessonPathInText(display) || detectLessonPathInText(raw)
+        if (!navPath) navPath = detectStaticNavInText(display)
         if (navPath) {
           tryVoiceNavigate(navPath)
         } else {
-          const offer = detectCourseOfferInText(display)
+          const offer = detectCourseOfferInText(display) || detectLessonPathInText(display)
           if (offer) pendingNavPath = offer
         }
       }
+
+      // Если последняя реплика скрыта — подтянуть последний видимый ответ ассистента
+      if (isAutoContextTranscript(last) || isHiddenVoiceContextMessage(last.text)) {
+        const agentVisible = lastVisibleAgentTranscript(transcripts)
+        if (agentVisible) voiceAssistantText.value = agentVisible
+      }
+
+      syncVoiceTranscriptsToHistory()
     })
 
     // Слушаем data-сообщения (навигация через [NAVIGATE:/...])
@@ -341,11 +965,13 @@ async function startUltravoxSession() {
         const data = JSON.parse(e.data)
         if (data?.type === 'navigate' && data?.path) {
           router.push(data.path)
+          scheduleVoicePageContextPush(700, true)
         }
       } catch {}
     })
 
     voiceState.value = 'LISTENING'
+    scheduleVoicePageContextPush(600, true)
 
   } catch (err) {
     console.error('[Ultravox] start error:', err)
@@ -356,6 +982,12 @@ async function startUltravoxSession() {
 }
 
 async function stopUltravoxSession() {
+  syncVoiceTranscriptsToHistory()
+  clearTimeout(voiceContextTimer)
+  voiceContextTimer = null
+  voiceSessionId = null
+  lastPushedVoiceContextKey = ''
+  voiceHistorySyncedOrdinals = new Set()
   if (uvSession) {
     try { await uvSession.leaveCall() } catch {}
     uvSession = null
@@ -575,7 +1207,7 @@ function initRecognition() {
       }
     } else {
       if (voiceState.value === 'LISTENING') {
-        clearWaitingMode()
+          clearWaitingMode()
 
         if (finalText) {
           // isFinal — добавляем в подтверждённый (не заменяем!)
@@ -729,14 +1361,22 @@ function forceCleanup() {
   stopUltravoxSession()
 }
 
+function onLessonChanged() {
+  if (voiceMode.value) scheduleVoicePageContextPush(350, true)
+}
+
 onMounted(() => {
   loadAllCourses()
+  fetchUser().then(() => loadHomeworkReminders())
   window.addEventListener('beforeunload', forceCleanup)
+  window.addEventListener('eduai-lesson-changed', onLessonChanged)
 })
 
 onUnmounted(() => {
+  document.documentElement.classList.remove('eduai-voice-active', 'island-expanded-page')
   forceCleanup()
   window.removeEventListener('beforeunload', forceCleanup)
+  window.removeEventListener('eduai-lesson-changed', onLessonChanged)
 })
 
 // ─── Voice Mode (Ultravox) ─────────────────────────────────────────────────
@@ -748,6 +1388,7 @@ function startVoiceMode() {
   voiceAssistantText.value = ''
   lastAssistantText.value = ''
   lastVoiceNavPath = null
+  lastPushedVoiceContextKey = ''
   voiceUserHasSpoken = false
   pendingNavPath = null
   startUltravoxSession()
@@ -761,6 +1402,14 @@ function stopVoiceMode() {
   voiceAssistantText.value = ''
   stopUltravoxSession()
 }
+
+watch(
+  () => [voiceMode.value, route.path, courseId.value, currentPage.value],
+  ([active]) => {
+    if (!active) return
+    scheduleVoicePageContextPush()
+  },
+)
 
 // Stubs для шаблона (Ultravox)
 function commitVoiceManually() {}
@@ -780,6 +1429,7 @@ async function speakText(text) {
     const blob = await res.blob()
     const url = URL.createObjectURL(blob)
     const audio = new Audio(url)
+    audio.volume = voiceVolume.value
     audio.onended = () => URL.revokeObjectURL(url)
     await audio.play()
   } catch (e) {
@@ -850,7 +1500,7 @@ async function handleUserVoice(text) {
     const res = await fetch('/api/chat/voice', {
       method: 'POST',
       headers,
-            body: JSON.stringify({
+      body: JSON.stringify({
         message: text, history: apiHistory,
         course_id: courseId.value, course_name: courseName.value,
         page_context: { ...pageContext.value, page_content: getPageText() }
@@ -983,12 +1633,30 @@ const isLoading = computed(() => isBusy.value)
 
 function renderMarkdown(text) {
   if (!text) return ''
-  const clean = stripNavFromSpeech(text)
-  return clean
+  let clean = stripNavFromSpeech(text)
+  const preserved = []
+  const stashSpan = (inner) => {
+    const esc = String(inner)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+    preserved.push(`<span class="hw-error">${esc}</span>`)
+    return `__HW_ERR_${preserved.length - 1}__`
+  }
+  clean = clean.replace(
+    /<span\s+(?:class=["']hw-error["']|style=["'][^"']*#ef4444[^"']*["'])[^>]*>([\s\S]*?)<\/span>/gi,
+    (_, inner) => stashSpan(inner)
+  )
+  clean = clean.replace(/\*\*([^*\n]+)\*\*/g, (_, inner) => stashSpan(inner))
+  clean = clean
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/\n/g, '<br>')
+  preserved.forEach((span, i) => {
+    clean = clean.replace(`__HW_ERR_${i}__`, span)
+  })
+  return clean
 }
 
 function handleSend(suggestion) {
@@ -1024,7 +1692,7 @@ async function sendStream() {
     const res = await fetch('/api/chat/stream', {
       method: 'POST',
       headers,
-            body: JSON.stringify({
+      body: JSON.stringify({
         message: userText, history: apiHistory,
         course_id: courseId.value, course_name: courseName.value,
         page_context: { ...pageContext.value, page_content: getPageText() }
@@ -1052,7 +1720,7 @@ async function sendStream() {
         try { evt = JSON.parse(jsonText) } catch { continue }
 
         if (evt.type === 'sources') {
-          history.value[assistantIdx].sources = Array.isArray(evt.content) ? evt.content : []
+          history.value[assistantIdx].sources = normalizeSources(evt.content)
         } else if (evt.type === 'token') {
           history.value[assistantIdx].content += String(evt.content ?? '')
           await scrollBottom()
@@ -1064,17 +1732,28 @@ async function sendStream() {
       }
     }
   } catch (e) {
-    errorText.value = e?.message ?? String(e)
-    if (!history.value[assistantIdx]?.content) history.value.pop()
+    const errMsg = e?.message ?? String(e)
+    errorText.value = errMsg.includes('503')
+      ? 'Ollama недоступна. Запустите Ollama и перезапустите бэкенд.'
+      : errMsg
+    if (!history.value[assistantIdx]?.content) {
+      history.value.pop()
+      if (history.value[assistantIdx - 1]?.role === 'user') history.value.pop()
+    }
   } finally {
     isBusy.value = false
+    await scrollBottom()
   }
 }
 
 // ─── Dynamic Island ─────────────────────────────────────────────────────────
 function onIslandClick() { voiceMode.value ? stopVoiceMode() : startVoiceMode() }
 
-function clearHistory() { history.value = []; errorText.value = '' }
+function clearHistory() {
+  history.value = []
+  errorText.value = ''
+  voiceHistorySyncedOrdinals = new Set()
+}
 
 const quickSuggestions = computed(() => {
   if (currentPage.value === 'course')
@@ -1084,17 +1763,29 @@ const quickSuggestions = computed(() => {
 function sendSuggestion(text) { message.value = text; sendStream() }
 
 function executeAction(evt) {
-  if (evt.action !== 'navigate' || !evt.path) return
+  if (evt.action !== 'navigate' || evt.path === undefined || evt.path === null) return
   const path = resolveNavigatePath(evt.path)
   if (!path) return
   const delay = voiceMode.value ? 500 : 300
-  setTimeout(() => {
+    setTimeout(() => {
     if (voiceMode.value) stopVoiceMode()
     router.push(path)
-  }, delay)
+    }, delay)
 }
 
 // ─── Computed ──────────────────────────────────────────────────────────────
+const islandExpanded = computed(() =>
+  voiceMode.value && !!(voiceTranscript.value || voiceAssistantText.value),
+)
+
+watch(voiceMode, (active) => {
+  document.documentElement.classList.toggle('eduai-voice-active', !!active)
+}, { immediate: true })
+
+watch(islandExpanded, (expanded) => {
+  document.documentElement.classList.toggle('island-expanded-page', !!expanded)
+}, { immediate: true })
+
 const voiceStatusText = computed(() => {
   if (voiceState.value === 'LISTENING') {
     if (isHearingSpeech.value) return 'Слышу вас...'
@@ -1167,7 +1858,7 @@ function onOrbPointerUp(e) {
     <!-- Chat FAB -->
     <button class="chat-fab" @click="togglePanel" :title="isOpen ? 'Закрыть чат' : 'Открыть чат EduAI'">
       {{ isOpen ? '✕' : '💬' }}
-    </button>
+            </button>
 
     <!-- Panels anchor (text chat) in bottom right -->
     <div class="panels-anchor" ref="panelsAnchorRef" :class="{'panels-open': isOpen}">
@@ -1179,42 +1870,45 @@ function onOrbPointerUp(e) {
               <div>
                 <div class="wp-title">EduAI</div>
                 <div class="wp-status">Online</div>
-              </div>
-            </div>
+          </div>
+          </div>
             <button class="icon-btn" @click="togglePanel">✕</button>
+          </div>
+          <div v-if="homeworkReminder && !history.length" class="wp-reminder">
+            <span>📋 {{ homeworkReminder }}</span>
+            <button type="button" class="icon-btn" @click="homeworkReminder = ''" title="Скрыть">✕</button>
           </div>
           <!-- Messages -->
           <div class="wp-thread" ref="threadEl">
             <div class="msg-row bot-row">
               <div class="msg-bubble bot-bubble">
                 <div class="msg-md">Привет! Я твой персональный ИИ-ассистент <b>{{ courseName }}</b>.<br>Чем могу помочь сегодня?</div>
-              </div>
-            </div>
+        </div>
+        </div>
             
             <div class="msg-row" v-for="(msg, i) in history" :key="i" :class="msg.role === 'user' ? 'user-row' : 'bot-row'">
               <div class="msg-bubble" :class="msg.role === 'user' ? 'user-bubble' : 'bot-bubble'">
                 <div class="msg-md" v-html="renderMarkdown(msg.content)"></div>
                 <div v-if="msg.sources && msg.sources.length" class="bubble-sources">
-                  <span class="source-chip" v-for="(src, idx) in msg.sources" :key="idx" :title="src.title">
+                  <span class="source-chip" v-for="(src, idx) in msg.sources" :key="idx" :title="typeof src === 'string' ? src : src.title">
                     <span class="src-icon">📄</span>
-                    <span class="src-name">{{ src.title || src.file_name }}</span>
-                    <span class="src-page" v-if="src.page_number">стр. {{ src.page_number }}</span>
+                    <span class="src-name">{{ typeof src === 'string' ? src : (src.title || src.file_name) }}</span>
                   </span>
-                </div>
+          </div>
                 <button v-if="msg.role === 'assistant'" class="icon-btn" @click="speakText(msg.content)" title="Озвучить">🔊</button>
-              </div>
-            </div>
+          </div>
+        </div>
 
             <div class="msg-row bot-row" v-if="isLoading">
               <div class="msg-bubble bot-bubble">
                 <div class="typing-indicator"><span></span><span></span><span></span></div>
-              </div>
             </div>
-            
+          </div>
+
             <div class="msg-row bot-row" v-if="errorText">
               <div class="msg-bubble error-bubble">
                 {{ errorText }}
-              </div>
+                </div>
             </div>
           </div>
 
@@ -1223,12 +1917,12 @@ function onOrbPointerUp(e) {
             <button v-for="(sug, idx) in quickSuggestions" :key="idx" class="sug-btn" @click="handleSend(sug)">
               {{ sug }}
             </button>
-          </div>
+        </div>
 
           <!-- Input -->
           <div class="wp-input">
             <button class="icon-btn voice-trigger-btn" @click="startVoiceMode('')" title="Голосовой режим">🎤</button>
-            <input 
+            <input
               v-model="message" 
               type="text" 
               placeholder="Спроси что-нибудь..." 
@@ -1239,21 +1933,43 @@ function onOrbPointerUp(e) {
           </div>
         </div>
       </transition>
+      </div>
+
+    <!-- Громкость и действия во время звонка -->
+    <div class="voice-dock" v-if="voiceMode" @click.stop>
+      <span class="voice-dock-vol-icon" aria-hidden="true">🔈</span>
+      <input
+        type="range"
+        class="voice-dock-slider"
+        min="0"
+        max="100"
+        v-model.number="voiceVolumePct"
+        @input="applyVoiceVolume"
+        @change="applyVoiceVolume"
+        title="Громкость Кортаны"
+      />
+      <button type="button" class="voice-dock-btn" @click="isOpen = true" title="Открыть чат">💬</button>
+      <button type="button" class="voice-dock-btn voice-dock-end" @click="stopVoiceMode" title="Завершить">✕</button>
     </div>
 
-    <!-- ══════════════════════ DYNAMIC ISLAND SYSTEM -->
-    <div class="island-system-container">
+    <!-- ══════════════════════ DYNAMIC ISLAND (iPhone-style) -->
+    <div
+      class="island-system-container"
+      :class="{ 'is-expanded': islandExpanded, 'is-voice': voiceMode }"
+    >
+      <div class="island-stack" :class="{ expanded: islandExpanded }">
       <!-- Main Island -->
       <div
         class="dynamic-island"
-        :class="{
+      :class="{
           'island-voice': voiceMode,
           'island-listening': voiceMode && voiceState === 'LISTENING',
           'island-thinking': voiceMode && voiceState === 'THINKING',
-          'island-speaking': voiceMode && voiceState === 'SPEAKING'
+          'island-speaking': voiceMode && voiceState === 'SPEAKING',
+          'island-compact': !islandExpanded,
         }"
         @click="onIslandClick"
-        :title="voiceMode ? 'Завершить' : 'Ассистент'"
+        :title="voiceMode ? 'Завершить звонок' : 'Голосовой ассистент'"
       >
         <!-- Иконка/Волна -->
         <span class="island-icon" v-if="!voiceMode">
@@ -1269,7 +1985,7 @@ function onOrbPointerUp(e) {
         <div class="island-voice-wave" v-if="voiceMode && voiceState === 'LISTENING'">
           <span v-for="i in 5" :key="i" class="wave-bar" 
             :style="{ height: (4 + (micVolume / 100) * 16) + 'px', animationDelay: (i * 0.1) + 's' }">
-          </span>
+      </span>
         </div>
         
         <div class="island-voice-thinking" v-if="voiceMode && voiceState === 'THINKING'">
@@ -1284,28 +2000,26 @@ function onOrbPointerUp(e) {
         <span v-if="voiceMode" class="island-status-text">
           {{ voiceStatusText }}
         </span>
-        <span v-if="!voiceMode" class="island-label">EduAI</span>
+        <span v-if="!voiceMode" class="island-label">Кортана</span>
       </div>
 
-      <!-- Drop Bridge (Gooey Connection) -->
-      <transition name="bridge-fade">
-        <div class="drop-bridge" v-if="voiceMode && (voiceTranscript || voiceAssistantText)"></div>
-      </transition>
-
-      <!-- Transcript Sub-Island (Drop Down) -->
-      <transition name="sub-island-slide">
-        <div class="sub-island-transcript" v-if="voiceMode && (voiceTranscript || voiceAssistantText)">
+      <transition name="island-expand">
+        <div v-if="islandExpanded" class="island-transcript-pane">
+          <div class="island-transcript-divider"></div>
           <div class="transcript-content" v-if="voiceState === 'LISTENING'">
-            <span class="user-label">Вы:</span> {{ voiceTranscript || 'Слушаю...' }}
+            <span class="user-label">Вы</span>
+            <span class="transcript-text">{{ voiceTranscript || 'Слушаю…' }}</span>
           </div>
           <div class="transcript-content bot" v-else-if="voiceAssistantText">
-            <span class="bot-label">EduAI:</span> <span v-html="renderMarkdown(voiceAssistantText)"></span>
+            <span class="bot-label">Кортана</span>
+            <span class="transcript-text" v-html="renderMarkdown(voiceAssistantText)"></span>
           </div>
-          <div class="transcript-content" v-else>
-            ...
+          <div class="transcript-content muted" v-else>
+            <span class="transcript-text">…</span>
           </div>
         </div>
       </transition>
+      </div>
     </div>
 
   </div>
@@ -1378,135 +2092,162 @@ function onOrbPointerUp(e) {
   transform: scale(0.9) translateY(20px);
 }
 
-/* ─── Dynamic Island System ────────────────────────────── */
+/* ─── Dynamic Island (iPhone-style) ─────────────────── */
 .island-system-container {
   position: fixed;
-  top: 20px;
+  top: max(10px, env(safe-area-inset-top, 0px));
   left: 50%;
-  transform: translateX(-50%) translateZ(0); /* Hardware Accel */
-  z-index: 9999;
+  transform: translateX(-50%) translateZ(0);
+  z-index: 9990;
   display: flex;
   flex-direction: column;
   align-items: center;
-  pointer-events: none; /* Let clicks pass through container */
+  pointer-events: none;
+  transition: top 0.45s cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.island-system-container.is-voice.is-expanded {
+  top: max(76px, calc(env(safe-area-inset-top, 0px) + 64px));
+}
+
+.island-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  pointer-events: auto;
+  filter: drop-shadow(0 8px 28px rgba(0, 0, 0, 0.45));
+  transition: transform 0.45s cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.island-stack.expanded {
+  background: #0a0a0a;
+  border-radius: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+  min-width: 300px;
+  max-width: min(420px, calc(100vw - 32px));
 }
 
 .dynamic-island {
   background: #000;
   color: #fff;
-  border-radius: 99px;
-  height: 44px;
-  min-width: 120px;
-  padding: 0 16px;
+  border-radius: 999px;
+  height: 40px;
+  min-width: 110px;
+  padding: 0 18px;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
   cursor: pointer;
-  pointer-events: auto;
-  box-shadow: 0 10px 30px rgba(0,0,0,0.3);
-  transition: all 0.4s cubic-bezier(0.3, 1, 0.2, 1);
-  will-change: width, height, transform, background;
+  box-shadow: none;
+  transition: background 0.35s ease, min-width 0.35s ease;
   user-select: none;
   position: relative;
-  z-index: 2; /* Main island is on top */
+  z-index: 2;
 }
 
-.island-voice {
-  min-width: 200px;
-  background: var(--accent);
+.island-stack.expanded .dynamic-island {
+  border-radius: 0;
+  background: transparent;
+  min-width: 0;
+  width: 100%;
+  box-shadow: none;
 }
 
-.island-thinking {
-  background: var(--accent2);
+.island-stack:not(.expanded) .dynamic-island {
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
 }
 
-.island-speaking {
-  background: #000;
-}
+.island-voice { min-width: 168px; }
+.island-listening { background: #1c1c1e; }
+.island-thinking { background: #2c2c2e; }
+.island-speaking { background: #1c1c1e; }
 
 .island-icon, .island-label, .island-status-text {
-  font-family: 'Inter', sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, 'Inter', system-ui, sans-serif;
   font-weight: 600;
-  font-size: 14px;
+  font-size: 13px;
+  letter-spacing: -0.01em;
   white-space: nowrap;
 }
 
-/* Voice Waves */
+.island-status-text { font-size: 12px; opacity: 0.92; }
+
 .island-voice-wave {
   display: flex;
   align-items: center;
-  gap: 3px;
-  height: 20px;
+  gap: 2px;
+  height: 18px;
 }
 .wave-bar {
-  width: 3px;
+  width: 2px;
   background: #fff;
   border-radius: 2px;
   transition: height 0.1s ease;
 }
-.island-voice-wave.speaking .wave-bar { animation: wavePulse 1s infinite alternate; }
+.island-voice-wave.speaking .wave-bar { animation: wavePulse 0.9s infinite alternate; }
 .island-voice-wave.speaking .wave-bar:nth-child(1) { animation-delay: 0.1s; }
-.island-voice-wave.speaking .wave-bar:nth-child(2) { animation-delay: 0.3s; }
-.island-voice-wave.speaking .wave-bar:nth-child(3) { animation-delay: 0.0s; }
-.island-voice-wave.speaking .wave-bar:nth-child(4) { animation-delay: 0.4s; }
-.island-voice-wave.speaking .wave-bar:nth-child(5) { animation-delay: 0.2s; }
+.island-voice-wave.speaking .wave-bar:nth-child(2) { animation-delay: 0.25s; }
+.island-voice-wave.speaking .wave-bar:nth-child(3) { animation-delay: 0s; }
+.island-voice-wave.speaking .wave-bar:nth-child(4) { animation-delay: 0.3s; }
+.island-voice-wave.speaking .wave-bar:nth-child(5) { animation-delay: 0.15s; }
 
 @keyframes wavePulse {
   0% { height: 4px; }
-  100% { height: 20px; }
+  100% { height: 16px; }
 }
 
 .island-voice-thinking { display: flex; align-items: center; gap: 4px; }
-.island-voice-thinking .dot { width: 6px; height: 6px; background: #fff; border-radius: 50%; animation: dotPulse 1.4s infinite; }
+.island-voice-thinking .dot {
+  width: 5px;
+  height: 5px;
+  background: #fff;
+  border-radius: 50%;
+  animation: dotPulse 1.4s infinite;
+}
 .island-voice-thinking .dot:nth-child(2) { animation-delay: 0.2s; }
 .island-voice-thinking .dot:nth-child(3) { animation-delay: 0.4s; }
 @keyframes dotPulse {
-  0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
-  40% { opacity: 1; transform: scale(1.2); }
+  0%, 80%, 100% { opacity: 0.35; transform: scale(0.85); }
+  40% { opacity: 1; transform: scale(1.1); }
 }
 
-/* Sub-Island Transcript Drop */
-.sub-island-transcript {
-  background: #000;
-  color: #fff;
-  border-radius: 24px;
-  padding: 12px 20px;
-  margin-top: 12px; /* Gap below main island */
-  min-width: 280px;
-  max-width: 400px;
-  box-shadow: 0 10px 30px rgba(0,0,0,0.3);
-  font-family: 'Inter', sans-serif;
-  font-size: 14px;
-  line-height: 1.5;
+.island-transcript-pane {
+  padding: 0 16px 14px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Inter', system-ui, sans-serif;
+  font-size: 13px;
+  line-height: 1.45;
+  color: #f5f5f7;
   pointer-events: auto;
-  z-index: 1; /* Slides from behind the main island slightly, conceptually */
-  border: 1px solid rgba(255,255,255,0.05);
-  will-change: transform, opacity;
-  position: relative;
 }
 
-/* The visual 'bridge' connecting the two islands */
-.drop-bridge {
-  position: absolute;
-  top: 40px; /* Overlaps bottom of main island */
-  width: 80px;
-  height: 24px;
-  background: #000;
-  border-radius: 0 0 16px 16px;
-  z-index: 1; /* Between main island and sub island */
-  pointer-events: none;
-}
-
-.bridge-fade-enter-active, .bridge-fade-leave-active {
-  transition: all 0.3s cubic-bezier(0.3, 1.5, 0.5, 1);
-}
-.bridge-fade-enter-from, .bridge-fade-leave-to {
-  opacity: 0;
-  transform: scaleY(0.5) scaleX(0.5) translateY(-10px);
+.island-transcript-divider {
+  height: 1px;
+  margin: 0 0 10px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.14) 20%,
+    rgba(255, 255, 255, 0.14) 80%,
+    transparent
+  );
 }
 
 .transcript-content {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  align-items: baseline;
+  max-height: 4.5em;
+  overflow: hidden;
+}
+
+.transcript-content.muted { opacity: 0.5; }
+
+.transcript-text {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   display: -webkit-box;
@@ -1514,20 +2255,96 @@ function onOrbPointerUp(e) {
   -webkit-box-orient: vertical;
 }
 
-.user-label { color: #9ca3af; font-weight: 600; margin-right: 4px; }
-.bot-label { color: var(--accent2); font-weight: 600; margin-right: 4px; }
+.user-label, .bot-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  flex-shrink: 0;
+}
+.user-label { color: #8e8e93; }
+.bot-label { color: #64d2ff; }
 
-/* Sub Island Slide Animation */
-.sub-island-slide-enter-active, .sub-island-slide-leave-active {
-  transition: all 0.4s cubic-bezier(0.3, 1.5, 0.5, 1);
+.island-expand-enter-active,
+.island-expand-leave-active {
+  transition: opacity 0.28s ease, max-height 0.38s cubic-bezier(0.32, 0.72, 0, 1);
+  overflow: hidden;
 }
-.sub-island-slide-enter-from, .sub-island-slide-leave-to {
+.island-expand-enter-from,
+.island-expand-leave-to {
   opacity: 0;
-  transform: translateY(-20px) scale(0.95);
+  max-height: 0;
 }
+.island-expand-enter-to,
+.island-expand-leave-from {
+  opacity: 1;
+  max-height: 120px;
+}
+
+/* Voice dock — громкость справа внизу */
+.voice-dock {
+  position: fixed;
+  bottom: 92px;
+  right: 24px;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: rgba(12, 12, 14, 0.92);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+  pointer-events: auto;
+}
+
+.voice-dock-vol-icon {
+  font-size: 14px;
+  line-height: 1;
+  opacity: 0.85;
+}
+
+.voice-dock-slider {
+  width: 88px;
+  height: 4px;
+  accent-color: #6366f1;
+  cursor: pointer;
+}
+
+.voice-dock-btn {
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  font-size: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s;
+}
+.voice-dock-btn:hover { background: rgba(255, 255, 255, 0.16); }
+.voice-dock-end { background: rgba(239, 68, 68, 0.25); }
+.voice-dock-end:hover { background: rgba(239, 68, 68, 0.45); }
 
 /* ─── Chat Internal Styles ────────────────────────────────── */
 .wp-header { padding: 16px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.02); }
+.wp-reminder {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  line-height: 1.4;
+  color: #fcd34d;
+  background: rgba(251, 191, 36, 0.08);
+  border-bottom: 1px solid rgba(251, 191, 36, 0.2);
+}
 .wp-header-left { display: flex; align-items: center; gap: 12px; }
 .wp-icon { font-size: 24px; background: rgba(255,255,255,0.05); width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; border-radius: 12px; }
 .wp-title { font-weight: 600; font-size: 15px; }
@@ -1542,6 +2359,7 @@ function onOrbPointerUp(e) {
 .user-bubble { background: var(--accent); color: white; border-bottom-right-radius: 4px; }
 .bot-bubble { background: rgba(255,255,255,0.05); border: 1px solid var(--border); border-bottom-left-radius: 4px; }
 .error-bubble { background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3); color: #fca5a5; }
+.msg-md :deep(.hw-error) { color: #ef4444; font-weight: 700; }
 
 .wp-input { padding: 12px 16px; border-top: 1px solid var(--border); display: flex; gap: 8px; align-items: center; background: rgba(0,0,0,0.2); }
 .wp-input input { flex: 1; background: transparent; border: none; color: var(--text); font-size: 14px; outline: none; }

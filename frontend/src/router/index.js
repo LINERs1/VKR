@@ -11,8 +11,11 @@ const router = createRouter({
     { path: '/courses/:id', component: CourseView, meta: { requiresAuth: true } },
     { path: '/profile', component: () => import('../views/ProfileView.vue'), meta: { requiresAuth: true } },
     { path: '/homeworks', component: () => import('../views/HomeworksView.vue'), meta: { requiresAuth: true } },
+    { path: '/homeworks/workshop', component: () => import('../views/HomeworkWorkshopListView.vue'), meta: { requiresAuth: true, teacherOnly: true } },
+    { path: '/homeworks/workshop/:id', component: () => import('../views/HomeworkWorkshopEditorView.vue'), meta: { requiresAuth: true, teacherOnly: true } },
     { path: '/homeworks/:id', component: () => import('../views/HomeworkDetailView.vue'), meta: { requiresAuth: true } },
-    { path: '/journal', component: () => import('../views/JournalView.vue'), meta: { requiresAuth: true } },
+    { path: '/journal', component: () => import('../views/JournalView.vue'), meta: { requiresAuth: true, teacherOnly: true } },
+    { path: '/students/:id', component: () => import('../views/StudentProfileView.vue'), meta: { requiresAuth: true, teacherOnly: true } },
     { path: '/login', component: LoginView, meta: { requiresGuest: true } },
   ],
   scrollBehavior(to) {
@@ -21,14 +24,19 @@ const router = createRouter({
   },
 })
 
-router.beforeEach((to, from) => {
-  const { isAuthenticated } = useAuth()
+router.beforeEach(async (to, from) => {
+  const { isAuthenticated, fetchUser } = useAuth()
   const isAuth = isAuthenticated()
 
   if (to.meta.requiresAuth && !isAuth) {
     return '/login'
   } else if (to.meta.requiresGuest && isAuth) {
     return '/'
+  }
+
+  if (to.meta.teacherOnly && isAuth) {
+    const user = await fetchUser()
+    if (user?.role !== 'teacher') return '/homeworks'
   }
 })
 

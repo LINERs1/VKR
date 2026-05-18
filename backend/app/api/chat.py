@@ -26,8 +26,8 @@ router = APIRouter()
 _GLOBAL_HOME_CONTEXT = (
     "Ты на главной странице платформы. "
     "На привет и «как дела?» отвечай по-человечески своими словами, не зеркаль вопрос. "
-    "Переход на страницу курса — только после явного согласия пользователя на твой вопрос «подходит? перевести?»; "
-    "на первую просьбу «переведи/открой курс» тег [NAVIGATE:/courses/…] не ставь. "
+    "Переход на курс — только после согласия; в вопросе назови полное название курса. "
+    "На первую просьбу «переведи/открой курс» тег [NAVIGATE:/courses/…] не ставь. "
     "Переход на главную по просьбе — можно сразу [NAVIGATE:/]."
 )
 
@@ -44,8 +44,17 @@ async def retrieve_context_for_chat(message: str, course_id: str):
     return source_docs, context, sources
 
 
-# Регулярка для NAVIGATE-тегов
-_NAV_RE = re.compile(r'\[NAVIGATE:([^\]]+)\]')
+# Регулярка для NAVIGATE-тегов ([NAVIGATE:/] и [NAVIGATE:] → главная)
+_NAV_RE = re.compile(r'\[NAVIGATE:([^\]]*)\]', re.IGNORECASE)
+
+
+def _normalize_nav_path(path: str) -> str:
+    p = (path or "").strip()
+    if not p or p.lower() in ("home", "главная", "главную", "main"):
+        return "/"
+    if not p.startswith("/"):
+        p = "/" + p
+    return p.rstrip("/") or "/"
 # Регулярка для разбивки на предложения
 _SENTENCE_RE = re.compile(r'(?<=[.!?\n])\s+')
 
@@ -103,8 +112,7 @@ async def _stream_tokens(chain, inputs: dict):
                     in_nav_tag = False
                     match = _NAV_RE.match(nav_buffer)
                     if match:
-                        # Это навигационный тег — выдаём action, не показываем пользователю
-                        yield ('action', match.group(1).strip())
+                        yield ('action', _normalize_nav_path(match.group(1)))
                     else:
                         # Не навигационный тег — показываем как текст
                         display_buffer += nav_buffer
@@ -154,8 +162,13 @@ async def stream_rag_response(
     except Exception as e:
         err_str = str(e)
         logger.error(f"Chat stream error: {e}")
-        if '503' in err_str or 'UNAVAILABLE' in err_str or 'high demand' in err_str:
-            msg = 'Gemini API сейчас перегружен. Подождите 10-30 секунд и повторите запрос.'
+        if '503' in err_str or 'ResponseError' in err_str:
+            if settings.LLM_PROVIDER == 'ollama':
+                msg = 'Ollama недоступна. Убедитесь, что Ollama запущена, и перезапустите бэкенд.'
+            else:
+                msg = 'Сервис LLM временно недоступен. Подождите и повторите запрос.'
+        elif 'UNAVAILABLE' in err_str or 'high demand' in err_str:
+            msg = 'API сейчас перегружен. Подождите 10-30 секунд и повторите запрос.'
         else:
             msg = f'Ошибка: {err_str}'
         yield f"data: {json.dumps({'type': 'error', 'content': msg})}\n\n"
@@ -246,8 +259,13 @@ async def stream_rag_voice_response(
     except Exception as e:
         err_str = str(e)
         logger.exception("Chat voice stream error:")
-        if '503' in err_str or 'UNAVAILABLE' in err_str or 'high demand' in err_str:
-            msg = 'Gemini API сейчас перегружен. Пожалуйста, повторите через несколько секунд.'
+        if '503' in err_str or 'ResponseError' in err_str:
+            if settings.LLM_PROVIDER == 'ollama':
+                msg = 'Ollama недоступна. Убедитесь, что Ollama запущена, и перезапустите бэкенд.'
+            else:
+                msg = 'Сервис LLM временно недоступен. Подождите и повторите запрос.'
+        elif 'UNAVAILABLE' in err_str or 'high demand' in err_str:
+            msg = 'API сейчас перегружен. Пожалуйста, повторите через несколько секунд.'
         else:
             msg = f'Ошибка: {err_str}'
         yield f"data: {json.dumps({'type': 'error', 'content': msg})}\n\n"

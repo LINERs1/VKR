@@ -1,15 +1,26 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
-import { apiFetch } from '../api'
 import { useRouter } from 'vue-router'
+import { apiFetch, hwApi } from '../api'
+import { useAuth } from '../composables/useAuth'
 
 const router = useRouter()
+const { fetchUser } = useAuth()
+
 const homeworks = ref([])
+const courses = ref([])
 const loading = ref(true)
 
 onMounted(async () => {
+  const user = await fetchUser()
+  if (!user || user.role !== 'teacher') {
+    router.push('/homeworks')
+    return
+  }
   try {
-    homeworks.value = await apiFetch('/homework/')
+    const [hw, crs] = await Promise.all([hwApi.getHomeworks(), apiFetch('/courses')])
+    homeworks.value = hw
+    courses.value = crs
   } catch (e) {
     console.error(e)
   } finally {
@@ -17,162 +28,206 @@ onMounted(async () => {
   }
 })
 
+const courseTitleMap = computed(() => {
+  const m = {}
+  for (const c of courses.value) m[c.id] = c.title
+  return m
+})
+
+const students = computed(() => {
+  const map = new Map()
+  for (const hw of homeworks.value) {
+    for (const a of hw.assignments || []) {
+      if (!map.has(a.student_id)) {
+        map.set(a.student_id, { id: a.student_id, name: a.student_name || `Ученик #${a.student_id}` })
+      }
+    }
+  }
+  return [...map.values()].sort((a, b) => a.name.localeCompare(b.name, 'ru'))
+})
+
+const courseGroups = computed(() => {
+  const byCourse = new Map()
+  for (const hw of homeworks.value) {
+    if (!byCourse.has(hw.course_id)) byCourse.set(hw.course_id, [])
+    byCourse.get(hw.course_id).push(hw)
+  }
+  return [...byCourse.entries()]
+    .map(([courseId, items]) => ({
+      courseId,
+      courseTitle: courseTitleMap.value[courseId] || courseId,
+      homeworks: [...items].sort((a, b) => b.id - a.id),
+    }))
+    .sort((a, b) => a.courseTitle.localeCompare(b.courseTitle, 'ru'))
+})
+
 const stats = computed(() => {
-  let totalGrades = 0;
-  let gradeCount = 0;
-  let pending = 0;
-  
-  homeworks.value.forEach(hw => {
-    hw.assignments.forEach(a => {
+  let totalGrades = 0
+  let gradeCount = 0
+  let pending = 0
+  let assigned = 0
+
+  for (const hw of homeworks.value) {
+    for (const a of hw.assignments || []) {
+      assigned++
       if (a.status === 'graded' && a.grade) {
-        totalGrades += a.grade;
-        gradeCount++;
+        totalGrades += a.grade
+        gradeCount++
       }
-      if (a.status === 'submitted') {
-        pending++;
-      }
-    });
-  });
-  
+      if (a.status === 'submitted') pending++
+    }
+  }
+
   return {
-    avg: gradeCount > 0 ? (totalGrades / gradeCount).toFixed(1) : '-',
-    pending: pending,
-    totalAssigned: homeworks.value.reduce((acc, hw) => acc + hw.assignments.length, 0)
+    avg: gradeCount > 0 ? (totalGrades / gradeCount).toFixed(1) : '—',
+    pending,
+    assigned,
   }
 })
 
-// Transform data into a matrix: rows are students, columns are homeworks
-const tableData = computed(() => {
-  const studentsMap = {}
-  
-  homeworks.value.forEach(hw => {
-    hw.assignments.forEach(a => {
-      if (!studentsMap[a.student_id]) {
-        studentsMap[a.student_id] = {
-          id: a.student_id,
-          name: a.student_name,
-          assignments: {}
-        }
-      }
-      studentsMap[a.student_id].assignments[hw.id] = a
-    })
-  })
-  
-  return Object.values(studentsMap)
-})
+function assignmentFor(hw, studentId) {
+  return (hw.assignments || []).find((a) => a.student_id === studentId) || null
+}
 
-function getStatusColor(status) {
-  switch (status) {
-    case 'graded': return '#10b981'
-    case 'submitted': return '#f59e0b'
-    default: return '#6b7280'
+function goToStudent(studentId) {
+  router.push(`/students/${studentId}`)
+}
+
+function goToWork(hw, studentId) {
+  const a = assignmentFor(hw, studentId)
+  if (!a) return
+  if (a.status === 'graded' || a.status === 'submitted') {
+    router.push({ path: `/homeworks/${hw.id}`, query: { student: studentId } })
   }
 }
 
-function getStatusLabel(status) {
-  switch (status) {
-    case 'graded': return 'Оценено'
-    case 'submitted': return 'Сдано'
-    default: return 'Ожидает'
-  }
+function cellLabel(a) {
+  if (!a) return '—'
+  if (a.status === 'graded' && a.grade != null) return String(a.grade)
+  if (a.status === 'submitted') return 'Сдано'
+  return 'Ожидает'
 }
 
-function goToHomework(hwId) {
-  router.push(`/homeworks/${hwId}`)
+function cellClass(a) {
+  if (!a) return 'empty'
+  if (a.status === 'graded' && a.grade != null) {
+    if (a.grade >= 4) return 'grade grade-good'
+    if (a.grade <= 3) return 'grade grade-bad'
+    return 'grade'
+  }
+  if (a.status === 'submitted') return 'status submitted'
+  return 'status pending'
+}
+
+function isClickable(a) {
+  return a && (a.status === 'graded' || a.status === 'submitted')
 }
 </script>
 
 <template>
   <div class="journal-page">
     <header class="journal-header">
-      <router-link to="/" class="btn-back">← Назад</router-link>
+      <router-link to="/" class="btn-back">← На главную</router-link>
       <h1>Журнал успеваемости</h1>
-      <p class="subtitle">Отслеживайте прогресс студентов и проверяйте задания</p>
+      <p class="subtitle">Строки — домашние задания по курсам, столбцы — ученики</p>
     </header>
 
     <div v-if="loading" class="loading-state">
       <div class="spinner"></div>
-      <p>Загрузка журнала...</p>
+      <p>Загрузка журнала…</p>
     </div>
 
-    <div v-if="!loading && homeworks.length > 0" class="stats-row">
-      <div class="stat-card">
-        <div class="stat-value">{{ stats.avg }}</div>
-        <div class="stat-label">Средний балл</div>
+    <template v-else>
+      <div v-if="homeworks.length" class="stats-row">
+        <div class="stat-card">
+          <div class="stat-value">{{ stats.avg }}</div>
+          <div class="stat-label">Средний балл</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value pending">{{ stats.pending }}</div>
+          <div class="stat-label">Ожидают проверки</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value accent">{{ stats.assigned }}</div>
+          <div class="stat-label">Назначений</div>
+        </div>
       </div>
-      <div class="stat-card">
-        <div class="stat-value" style="color: #f59e0b;">{{ stats.pending }}</div>
-        <div class="stat-label">Ожидают проверки</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-value" style="color: #6366f1;">{{ stats.totalAssigned }}</div>
-        <div class="stat-label">Всего выдано</div>
-      </div>
-    </div>
 
-    <div v-else-if="tableData.length === 0" class="empty-state">
-      <div class="empty-icon">📊</div>
-      <h2>Нет данных</h2>
-      <p>Вы еще не выдавали домашних заданий.</p>
-    </div>
+      <div v-if="!students.length || !homeworks.length" class="empty-state">
+        <div class="empty-icon">📊</div>
+        <h2>Нет данных</h2>
+        <p>Назначьте домашние задания ученикам — они появятся в журнале.</p>
+      </div>
 
-    <div v-else class="journal-container">
-      <table class="journal-table">
-        <thead>
-          <tr>
-            <th class="student-col">Студент</th>
-            <th v-for="hw in homeworks" :key="hw.id" class="hw-col" @click="goToHomework(hw.id)" title="Перейти к заданию">
-              <div class="hw-title">{{ hw.title }}</div>
-              <div class="hw-course">{{ hw.course?.title || 'Курс' }}</div>
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="student in tableData" :key="student.id">
-            <td class="student-name">
-              <div class="avatar">{{ student.name.charAt(0).toUpperCase() }}</div>
-              {{ student.name }}
-            </td>
-            <td v-for="hw in homeworks" :key="hw.id" class="grade-cell" @click="goToHomework(hw.id)">
-              <div class="assignment-wrapper" v-if="student.assignments[hw.id]">
-                <div 
-                  class="grade-badge" 
-                  v-if="student.assignments[hw.id].status === 'graded'"
-                  :class="{'grade-good': student.assignments[hw.id].grade >= 4, 'grade-bad': student.assignments[hw.id].grade <= 3}"
+      <div v-else class="journal-container">
+        <table class="journal-table">
+          <thead>
+            <tr>
+              <th class="hw-col sticky-col">Домашнее задание</th>
+              <th
+                v-for="st in students"
+                :key="st.id"
+                class="student-col"
+                @click="goToStudent(st.id)"
+              >
+                <div class="student-head">
+                  <span class="avatar">{{ st.name.charAt(0).toUpperCase() }}</span>
+                  <span class="student-name">{{ st.name }}</span>
+                </div>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            <template v-for="group in courseGroups" :key="group.courseId">
+              <tr class="course-row">
+                <td :colspan="students.length + 1">
+                  <span class="course-label">{{ group.courseTitle }}</span>
+                  <span class="course-id">{{ group.courseId }}</span>
+                </td>
+              </tr>
+              <tr v-for="hw in group.homeworks" :key="hw.id" class="hw-row">
+                <td class="hw-title-cell sticky-col">
+                  <span class="hw-title">{{ hw.title }}</span>
+                  <span v-if="hw.is_demo" class="demo-tag">Пример</span>
+                </td>
+                <td
+                  v-for="st in students"
+                  :key="`${hw.id}-${st.id}`"
+                  class="grade-cell"
+                  :class="{ clickable: isClickable(assignmentFor(hw, st.id)) }"
+                  @click="goToWork(hw, st.id)"
                 >
-                  {{ student.assignments[hw.id].grade }}
-                </div>
-                <div v-else class="status-badge" :style="{ color: getStatusColor(student.assignments[hw.id].status) }">
-                  {{ getStatusLabel(student.assignments[hw.id].status) }}
-                </div>
-              </div>
-              <div v-else class="no-assignment">-</div>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
+                  <span :class="cellClass(assignmentFor(hw, st.id))">
+                    {{ cellLabel(assignmentFor(hw, st.id)) }}
+                  </span>
+                </td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </template>
   </div>
 </template>
 
 <style scoped>
 .journal-page {
-  padding: 40px;
-  max-width: 1200px;
+  padding: 32px 24px 48px;
+  max-width: 1400px;
   margin: 0 auto;
-  font-family: 'Inter', sans-serif;
-  color: #fff;
+  font-family: 'Inter', system-ui, sans-serif;
+  color: #e4e4e7;
 }
 
 .journal-header {
-  margin-bottom: 30px;
+  margin-bottom: 28px;
 }
 
 .btn-back {
   display: inline-block;
   color: #9ca3af;
   text-decoration: none;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
   font-size: 14px;
   transition: color 0.2s;
 }
@@ -182,112 +237,144 @@ function goToHomework(hwId) {
 }
 
 h1 {
-  font-size: 32px;
+  font-size: 28px;
   font-weight: 700;
-  margin: 0 0 8px 0;
+  margin: 0 0 6px;
   background: linear-gradient(135deg, #fff 0%, #a5b4fc 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
 }
 
 .subtitle {
-  color: #9ca3af;
+  color: #71717a;
   margin: 0;
-  font-size: 15px;
+  font-size: 14px;
 }
 
-.loading-state, .empty-state {
+.loading-state,
+.empty-state {
   text-align: center;
-  padding: 80px 20px;
-  background: #111;
-  border-radius: 24px;
-  border: 1px solid rgba(255,255,255,0.05);
+  padding: 64px 20px;
+  background: #18181b;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .spinner {
-  width: 40px;
-  height: 40px;
-  border: 3px solid rgba(99,102,241,0.3);
+  width: 36px;
+  height: 36px;
+  border: 3px solid rgba(99, 102, 241, 0.25);
   border-top-color: #6366f1;
   border-radius: 50%;
-  animation: spin 1s linear infinite;
-  margin: 0 auto 20px;
+  animation: spin 0.8s linear infinite;
+  margin: 0 auto 16px;
 }
 
 @keyframes spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .empty-icon {
-  font-size: 48px;
-  margin-bottom: 16px;
-  opacity: 0.5;
+  font-size: 40px;
+  margin-bottom: 12px;
+  opacity: 0.6;
+}
+
+.stats-row {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.stat-card {
+  flex: 1;
+  background: #18181b;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 14px;
+  padding: 18px;
+  text-align: center;
+}
+
+.stat-value {
+  font-size: 32px;
+  font-weight: 700;
+  color: #fff;
+  margin-bottom: 4px;
+}
+
+.stat-value.pending {
+  color: #fbbf24;
+}
+
+.stat-value.accent {
+  color: #818cf8;
+}
+
+.stat-label {
+  color: #71717a;
+  font-size: 13px;
 }
 
 .journal-container {
-  background: #111;
-  border-radius: 20px;
-  border: 1px solid rgba(255,255,255,0.05);
+  background: #18181b;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
   overflow-x: auto;
-  box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
 
 .journal-table {
   width: 100%;
   border-collapse: collapse;
-  text-align: left;
+  min-width: 640px;
 }
 
-.journal-table th, .journal-table td {
-  padding: 16px 20px;
-  border-bottom: 1px solid rgba(255,255,255,0.05);
+.journal-table th,
+.journal-table td {
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  vertical-align: middle;
 }
 
-.journal-table th {
-  background: rgba(255,255,255,0.02);
+.sticky-col {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: #18181b;
+  min-width: 220px;
+  max-width: 280px;
+}
+
+.journal-table thead th {
+  background: #111113;
   font-weight: 500;
-  color: #9ca3af;
-  cursor: pointer;
-  transition: background 0.2s;
-  white-space: nowrap;
+  top: 0;
+  z-index: 3;
 }
 
-.journal-table th:hover {
-  background: rgba(255,255,255,0.05);
+.journal-table thead .sticky-col {
+  background: #111113;
+  z-index: 4;
 }
 
 .student-col {
-  width: 250px;
-  border-right: 1px solid rgba(255,255,255,0.05);
-}
-
-.hw-col {
-  min-width: 150px;
+  min-width: 120px;
   text-align: center;
+  cursor: pointer;
+  transition: background 0.15s;
 }
 
-.hw-title {
-  color: #e5e7eb;
-  font-size: 14px;
-  margin-bottom: 4px;
+.student-col:hover {
+  background: rgba(99, 102, 241, 0.12);
 }
 
-.hw-course {
-  font-size: 12px;
-  color: #6b7280;
-}
-
-.journal-table tbody tr:hover {
-  background: rgba(255,255,255,0.02);
-}
-
-.student-name {
+.student-head {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 12px;
-  font-weight: 500;
-  color: #f3f4f6;
-  border-right: 1px solid rgba(255,255,255,0.05);
+  gap: 6px;
 }
 
 .avatar {
@@ -298,84 +385,122 @@ h1 {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   color: #fff;
+}
+
+.student-name {
+  font-size: 13px;
+  color: #e4e4e7;
+  line-height: 1.2;
+}
+
+.hw-col {
+  text-align: left;
+  color: #a1a1aa;
+  font-size: 13px;
+}
+
+.course-row td {
+  background: rgba(99, 102, 241, 0.08);
+  border-bottom: 1px solid rgba(99, 102, 241, 0.2);
+  padding: 10px 14px;
+}
+
+.course-label {
+  font-weight: 600;
+  color: #c4b5fd;
+  margin-right: 10px;
+}
+
+.course-id {
+  font-size: 12px;
+  color: #71717a;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.hw-row:hover .sticky-col {
+  background: #1f1f23;
+}
+
+.hw-title-cell {
+  border-right: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.hw-title {
+  display: block;
+  font-size: 14px;
+  color: #f4f4f5;
+  line-height: 1.35;
+}
+
+.demo-tag {
+  display: inline-block;
+  margin-top: 4px;
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(99, 102, 241, 0.2);
+  color: #a5b4fc;
 }
 
 .grade-cell {
   text-align: center;
+}
+
+.grade-cell.clickable {
   cursor: pointer;
-  transition: background 0.2s;
 }
 
-.grade-cell:hover {
-  background: rgba(255,255,255,0.05);
+.grade-cell.clickable:hover {
+  background: rgba(255, 255, 255, 0.04);
 }
 
-.assignment-wrapper {
-  display: flex;
-  justify-content: center;
-}
-
-.grade-badge {
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
-  display: flex;
+.grade,
+.status,
+.empty {
+  display: inline-flex;
   align-items: center;
   justify-content: center;
+  min-width: 36px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  font-size: 14px;
   font-weight: 600;
-  font-size: 15px;
-  background: rgba(255,255,255,0.1);
+}
+
+.grade {
+  background: rgba(255, 255, 255, 0.08);
   color: #fff;
 }
 
 .grade-good {
-  background: rgba(16, 185, 129, 0.2);
+  background: rgba(16, 185, 129, 0.18);
   color: #34d399;
 }
 
 .grade-bad {
-  background: rgba(239, 68, 68, 0.2);
+  background: rgba(239, 68, 68, 0.18);
   color: #f87171;
 }
 
-.status-badge {
-  font-size: 13px;
+.status.submitted {
+  background: rgba(59, 130, 246, 0.15);
+  color: #60a5fa;
+  font-size: 12px;
   font-weight: 500;
 }
 
-.no-assignment {
-  color: #374151;
-}
-.stats-row {
-  display: flex;
-  gap: 20px;
-  margin-bottom: 24px;
+.status.pending {
+  color: #71717a;
+  font-size: 12px;
+  font-weight: 500;
 }
 
-.stat-card {
-  background: #111;
-  border-radius: 16px;
-  padding: 20px;
-  flex: 1;
-  border: 1px solid rgba(255,255,255,0.05);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-}
-
-.stat-value {
-  font-size: 36px;
-  font-weight: 700;
-  color: #fff;
-  margin-bottom: 8px;
-}
-
-.stat-label {
-  color: #9ca3af;
-  font-size: 14px;
+.empty {
+  color: #52525b;
+  font-weight: 400;
 }
 </style>

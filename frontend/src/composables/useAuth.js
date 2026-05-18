@@ -1,5 +1,5 @@
 import { ref } from 'vue'
-import { apiFetch } from '../api'
+import { apiFetch, getApiBaseUrl } from '../api'
 
 const user = ref(null)
 const token = ref(localStorage.getItem('token'))
@@ -10,7 +10,7 @@ export function useAuth() {
     formData.append('username', username)
     formData.append('password', password)
 
-    const res = await fetch('http://127.0.0.1:8000/api/auth/login', {
+    const res = await fetch(`${getApiBaseUrl()}/auth/login`, {
       method: 'POST',
       body: formData
     })

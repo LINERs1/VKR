@@ -1,5 +1,12 @@
+export function getApiBaseUrl() {
+  const v = import.meta.env.VITE_API_BASE_URL
+  if (v === '/api' || v === '') return '/api'
+  if (typeof v === 'string' && v.startsWith('http')) return v.replace(/\/$/, '')
+  return 'http://127.0.0.1:8000/api'
+}
+
 export async function apiFetch(endpoint, options = {}) {
-  const baseUrl = 'http://127.0.0.1:8000/api'
+  const baseUrl = getApiBaseUrl()
   const url = endpoint.startsWith('http') ? endpoint : `${baseUrl}${endpoint}`
   
   const headers = { ...options.headers }
@@ -40,6 +47,29 @@ export const hwApi = {
   getHomeworks: () => apiFetch('/homework'),
   getHomework: (id) => apiFetch(`/homework/${id}`),
   createHomework: (data) => apiFetch('/homework', { method: 'POST', body: JSON.stringify(data) }),
+  getJournalSummary: () => apiFetch('/homework/journal/summary'),
+  getReminders: () => apiFetch('/homework/reminders'),
+  getHomeworkHint: (assignmentId, draft) =>
+    apiFetch(`/homework/assignments/${assignmentId}/hint`, {
+      method: 'POST',
+      body: JSON.stringify(draft || {}),
+    }),
   submitHomework: (assignmentId, data) => apiFetch(`/homework/assignments/${assignmentId}/submit`, { method: 'PUT', body: JSON.stringify(data) }),
-  gradeHomework: (assignmentId, data) => apiFetch(`/homework/assignments/${assignmentId}/grade`, { method: 'PUT', body: JSON.stringify(data) })
+  gradeHomework: (assignmentId, data) => apiFetch(`/homework/assignments/${assignmentId}/grade`, { method: 'PUT', body: JSON.stringify(data) }),
+  aiReviewHomework: (assignmentId) => apiFetch(`/homework/assignments/${assignmentId}/ai-review`, { method: 'POST' })
+}
+
+export const workshopApi = {
+  listTemplates: () => apiFetch('/homework/templates'),
+  getTemplate: (id) => apiFetch(`/homework/templates/${id}`),
+  createTemplate: (data) =>
+    apiFetch('/homework/templates', { method: 'POST', body: JSON.stringify(data) }),
+  updateTemplate: (id, data) =>
+    apiFetch(`/homework/templates/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteTemplate: (id) => apiFetch(`/homework/templates/${id}`, { method: 'DELETE' }),
+  assignTemplate: (id, studentIds) =>
+    apiFetch(`/homework/templates/${id}/assign`, {
+      method: 'POST',
+      body: JSON.stringify({ student_ids: studentIds }),
+    }),
 }

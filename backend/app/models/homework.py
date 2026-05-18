@@ -1,7 +1,10 @@
-from sqlalchemy import Column, Integer, String, Text, ForeignKey
-from sqlalchemy.orm import relationship
-from app.database import Base
 import enum
+import json
+
+from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, Text
+from sqlalchemy.orm import relationship
+
+from app.database import Base
 
 class HomeworkStatus(str, enum.Enum):
     pending = "pending"
@@ -16,6 +19,8 @@ class Homework(Base):
     teacher_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     title = Column(String, nullable=False)
     description = Column(Text, nullable=False)
+    content_json = Column(Text, nullable=True)
+    is_demo = Column(Boolean, default=False, nullable=False)
 
     course = relationship("Course", back_populates="homeworks")
     teacher = relationship("User", foreign_keys=[teacher_id], back_populates="homeworks_given")
@@ -31,8 +36,19 @@ class HomeworkAssignment(Base):
     status = Column(String, default=HomeworkStatus.pending.value)
     student_code = Column(Text, nullable=True)
     student_text = Column(Text, nullable=True)
+    student_quiz_json = Column(Text, nullable=True)
     teacher_feedback = Column(Text, nullable=True)
     grade = Column(Integer, nullable=True)
 
     homework = relationship("Homework", back_populates="assignments")
     student = relationship("User", foreign_keys=[student_id], back_populates="homeworks_received")
+
+    @property
+    def student_quiz(self) -> dict | None:
+        if not self.student_quiz_json:
+            return None
+        try:
+            data = json.loads(self.student_quiz_json)
+            return data if isinstance(data, dict) else None
+        except json.JSONDecodeError:
+            return None
