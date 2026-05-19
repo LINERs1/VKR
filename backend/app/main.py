@@ -4,11 +4,14 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import chat, documents, widget, courses, stt, auth, homework, homework_templates, ultravox
+from app.api import chat, documents, widget, courses, stt, auth, homework, homework_templates, ultravox, adaptive, analytics
 from app.config import settings
 from app.database import Base, engine, SessionLocal
 import app.models.homework  # noqa: F401
 import app.models.homework_template  # noqa: F401
+import app.models.student_weak_topic  # noqa: F401
+import app.models.chat_message  # noqa: F401
+import app.models.assistant_metric  # noqa: F401
 import app.models.user
 import app.models.course
 from sqlalchemy import text
@@ -108,6 +111,8 @@ app.include_router(auth.router,      prefix="/api/auth", tags=["auth"])
 app.include_router(homework_templates.router, prefix="/api/homework", tags=["homework-workshop"])
 app.include_router(homework.router, prefix="/api/homework", tags=["homework"])
 app.include_router(ultravox.router,  prefix="/api/ultravox", tags=["ultravox"])
+app.include_router(adaptive.router, prefix="/api/adaptive", tags=["adaptive"])
+app.include_router(analytics.router, prefix="/api/analytics", tags=["analytics"])
 
 
 @app.get("/api/health")

@@ -16,10 +16,18 @@ _FALLBACK_COURSES = [
 ]
 
 
+def _static_routes_for_role(role: str | None) -> List[tuple[str, str]]:
+    routes = list(STATIC_ROUTES)
+    if role == "student":
+        routes = [(p, t) for p, t in routes if p != "/journal"]
+    return routes
+
+
 def build_navigation_prompt(
     available_courses: List[Dict[str, Any]],
     *,
     voice: bool = False,
+    role: str | None = None,
 ) -> str:
     courses = available_courses or _FALLBACK_COURSES
     lines: List[str] = []
@@ -27,38 +35,41 @@ def build_navigation_prompt(
     if voice:
         lines.extend([
             "### НАВИГАЦИЯ (голос) — ОБЯЗАТЕЛЬНО",
-            "Тег [NAVIGATE:путь] — служебная метка ТОЛЬКО в самом конце ответа. Её НЕ произносят вслух.",
-            "СТРОГО ЗАПРЕЩЕНО говорить вслух: navigate, NAVIGATE, courses, URL, слэши, id, скобки, английский.",
-            "В приветствии и без просьбы пользователя — НЕ ставь [NAVIGATE:...].",
+            "Для любого перехода по сайту вызывай инструмент navigatePage(path=...).",
+            "ЗАПРЕЩЕНО произносить вслух: navigate, NAVIGATE, path, URL, слэши, id курса, скобки, теги.",
+            "ЗАПРЕЩЕНО писать или говорить [NAVIGATE:...] — только navigatePage.",
+            "Сначала одной фразой по-русски («Открываю журнал»), затем navigatePage. После вызова не повторяй переход.",
+            "В приветствии и без просьбы пользователя — navigatePage не вызывай.",
             "",
-            "Переход на КУРС — ровно два шага:",
-            "  Шаг 1 (БЕЗ тега): назови полное название курса из списка и спроси подтверждение.",
-            "  Шаг 2 (после «да», «давай», «ок»): коротко «Открываю курс …»",
-            "    и в конце молча один тег: [NAVIGATE:/courses/python]",
+            "Переход на КУРС — два шага:",
+            "  Шаг 1: назови полное название курса и спроси подтверждение (без navigatePage).",
+            "  Шаг 2 (после «да», «давай», «ок»): navigatePage(path=\"/courses/{course_id}\") "
+            "и коротко «Открываю курс …».",
             "",
-            "Переход на УРОК внутри курса:",
-            "  Формат тега: [NAVIGATE:/courses/{course_id}?lesson={lesson_id}]",
-            "  Пример: [NAVIGATE:/courses/python?lesson=2]",
-            "  Сначала открой курс (или убедись, что пользователь уже на нём), затем урок.",
-            "  Назови полное название урока из списка ниже.",
+            "Переход на УРОК: navigatePage(path=\"/courses/{course_id}?lesson={lesson_id}\").",
+            "Сначала курс, затем урок. Назови полное название урока из списка.",
             "",
-            "Журнал / Профиль / Главная / Домашние задания — тег сразу при явной просьбе.",
-            "Используй ТОЛЬКО id из списка ниже.",
+            "Журнал / Профиль / Главная / Домашние задания — navigatePage сразу при явной просьбе.",
+            "Используй ТОЛЬКО пути из списка ниже.",
         ])
     lines.append("")
+    route_fmt = "navigatePage(path=\"{path}\")" if voice else "[NAVIGATE:{path}]"
     lines.append("Доступные маршруты:")
-    for path, title in STATIC_ROUTES:
-        lines.append(f"  - {title} → [NAVIGATE:{path}]")
+    for path, title in _static_routes_for_role(role):
+        lines.append(f"  - {title} → {route_fmt.format(path=path)}")
 
     lines.append("")
-    lines.append("Курсы (точный id в теге):")
+    lines.append("Курсы (точный id в пути):")
     for c in courses:
         cid = c.get("id", "")
         title = c.get("title", "")
         desc = (c.get("description") or "")[:80]
         icon = c.get("icon", "")
         extra = f" — {desc}" if desc else ""
-        lines.append(f"  - {icon} «{title}» (id: {cid}){extra} → [NAVIGATE:/courses/{cid}]")
+        lines.append(
+            f"  - {icon} «{title}» (id: {cid}){extra} → "
+            f"{route_fmt.format(path=f'/courses/{cid}')}"
+        )
         lessons = c.get("lessons") or []
         if lessons:
             lines.append(f"    Уроки курса «{title}»:")
@@ -66,17 +77,22 @@ def build_navigation_prompt(
                 lid = les.get("id")
                 lt = les.get("title", "")
                 lines.append(
-                    f"      · «{lt}» (lesson_id: {lid}) → [NAVIGATE:/courses/{cid}?lesson={lid}]"
+                    f"      · «{lt}» (lesson_id: {lid}) → "
+                    f"{route_fmt.format(path=f'/courses/{cid}?lesson={lid}')}"
                 )
 
     return "\n".join(lines)
 
 
-def build_navigation_routes_list(available_courses: List[Dict[str, Any]]) -> str:
+def build_navigation_routes_list(
+    available_courses: List[Dict[str, Any]],
+    *,
+    role: str | None = None,
+) -> str:
     """Только список маршрутов (правила навигации — в основном промпте чата)."""
     courses = available_courses or _FALLBACK_COURSES
     lines = ["Список доступных маршрутов и курсов:"]
-    for path, title in STATIC_ROUTES:
+    for path, title in _static_routes_for_role(role):
         lines.append(f"  - {title} → [NAVIGATE:{path}]")
     lines.append("")
     lines.append("Курсы:")

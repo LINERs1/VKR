@@ -30,11 +30,18 @@ def _normalize_quiz_items(raw: Any) -> list[dict[str, Any]]:
             ci = int(ci)
         except (TypeError, ValueError):
             ci = 0
+        lid = item.get("lesson_id")
+        try:
+            lesson_id = int(lid) if lid is not None and lid != "" else None
+        except (TypeError, ValueError):
+            lesson_id = None
         out.append(
             {
                 "question": str(item.get("question", "") or "").strip(),
                 "options": opts,
                 "correct_index": ci,
+                "topic": str(item.get("topic", "") or "").strip(),
+                "lesson_id": lesson_id,
             }
         )
     return out

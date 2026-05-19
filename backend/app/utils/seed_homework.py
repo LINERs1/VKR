@@ -1,6 +1,7 @@
 """Демо-домашнее задание для проверки ИИ (код + тесты + письменная часть)."""
 
 import logging
+from functools import lru_cache
 from pathlib import Path
 
 from sqlalchemy.orm import Session
@@ -41,6 +42,7 @@ DEMO_STUDENT_TEXT = """1. Средний балл — это сумма всех
 """
 
 
+@lru_cache(maxsize=1)
 def _build_description() -> str:
     tests_src = (DATA_DIR / "test_calculator.py").read_text(encoding="utf-8")
     ref_src = (DATA_DIR / "calculator.py").read_text(encoding="utf-8")

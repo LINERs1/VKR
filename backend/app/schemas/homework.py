@@ -86,6 +86,8 @@ class HomeworkReminderItem(BaseModel):
 class HomeworkRemindersResponse(BaseModel):
     role: str
     message: str
+    weak_topics: List[dict] = []
+    adaptive_message: str = ""
     pending_count: Optional[int] = None
     waiting_count: Optional[int] = None
     pending_review_count: Optional[int] = None

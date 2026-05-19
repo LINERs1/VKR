@@ -10,6 +10,8 @@ class QuizItem(BaseModel):
     question: str = ""
     options: List[str] = Field(default_factory=list)
     correct_index: Optional[int] = Field(default=0, description="Индекс верного варианта (0-based)")
+    topic: str = Field(default="", description="Тема для адаптивного обучения, напр. SQL JOIN")
+    lesson_id: Optional[int] = Field(default=None, description="Урок курса для повторения темы")
 
     @field_validator("options", mode="before")
     @classmethod

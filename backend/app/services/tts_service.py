@@ -1,10 +1,13 @@
+import hashlib
 import io
 import logging
-
 logger = logging.getLogger(__name__)
 
-
 import re
+
+# Кэш озвучки (приветствие и повторяющиеся фразы)
+_TTS_CACHE: dict[str, bytes] = {}
+_TTS_CACHE_MAX = 64
 
 def strip_emojis(text: str) -> str:
     """Удаляет эмодзи из текста, чтобы TTS их не озвучивал, сохраняя пунктуацию."""
@@ -29,7 +32,12 @@ def clean_text_for_tts(text: str) -> str:
     text = re.sub(r'\s+', ' ', text).strip()
     return text
 
-async def synthesize_speech(text: str) -> bytes | None:
+def _tts_cache_key(text: str, provider: str, voice: str) -> str:
+    digest = hashlib.sha256(f"{provider}|{voice}|{text}".encode("utf-8")).hexdigest()
+    return digest
+
+
+async def _synthesize_uncached(text: str) -> bytes | None:
     """
     Единая точка синтеза речи.
     Провайдер выбирается через TTS_PROVIDER в .env:
@@ -65,6 +73,41 @@ async def synthesize_speech(text: str) -> bytes | None:
 
     logger.warning(f"Unknown TTS_PROVIDER '{provider}', falling back to edge-tts")
     return await _synthesize_edge(text, settings.TTS_VOICE)
+
+
+async def synthesize_speech(text: str) -> bytes | None:
+    """Синтез с кэшем для одинаковых фраз (приветствие и т.п.)."""
+    from app.config import settings
+
+    if not text or not text.strip():
+        return None
+
+    cleaned = strip_emojis(clean_text_for_tts(text))
+    if not cleaned:
+        return None
+
+    provider = settings.TTS_PROVIDER.lower()
+    voice_key = (
+        settings.TTS_VOICE
+        if provider == "edge"
+        else settings.ELEVENLABS_VOICE_ID
+        if provider == "elevenlabs"
+        else settings.OPENAI_TTS_VOICE
+        if provider == "openai"
+        else settings.SILERO_VOICE
+        if provider == "silero"
+        else provider
+    )
+    key = _tts_cache_key(cleaned, provider, voice_key)
+    if key in _TTS_CACHE:
+        return _TTS_CACHE[key]
+
+    audio = await _synthesize_uncached(text)
+    if audio:
+        if len(_TTS_CACHE) >= _TTS_CACHE_MAX:
+            _TTS_CACHE.pop(next(iter(_TTS_CACHE)))
+        _TTS_CACHE[key] = audio
+    return audio
 
 
 # ---------------------------------------------------------------------------

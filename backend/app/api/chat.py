@@ -2,13 +2,16 @@ import json
 import logging
 import base64
 import re
+import time
 from typing import AsyncIterator
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse, Response
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.database import get_db
 from app.services.rag_service import (
     get_retriever,
     get_chain,
@@ -16,7 +19,16 @@ from app.services.rag_service import (
     format_history,
 )
 from app.services.tts_service import synthesize_speech
-from app.models.user import User
+from app.services.chat_history_service import (
+    get_recent_history,
+    merge_history,
+    save_exchange,
+)
+from app.services.metrics_service import record_metric
+from app.services.weak_topics_service import build_weak_topics_prompt_block
+from app.models.user import User, UserRole
+from app.services.auth_service import get_current_user, get_current_user_optional
+from app.schemas.adaptive import ChatHistoryMessage
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -138,16 +150,40 @@ async def stream_rag_response(
     course_id: str,
     course_name: str,
     page_context: dict = {},
-    current_user: User = None
+    current_user: User = None,
+    db: Session | None = None,
 ) -> AsyncIterator[str]:
+    full_response = ""
     try:
+        ctx = dict(page_context or {})
+        if current_user and current_user.role == UserRole.student.value and db:
+            block = build_weak_topics_prompt_block(db, current_user.id, course_id)
+            if block:
+                ctx["weak_topics_prompt"] = block
+
+        t_rag = time.perf_counter()
         _docs, context, sources = await retrieve_context_for_chat(message, course_id)
+        rag_ms = (time.perf_counter() - t_rag) * 1000
+        if db and current_user:
+            record_metric(
+                db,
+                event_type="chat_rag",
+                user_id=current_user.id,
+                course_id=course_id,
+                duration_ms=rag_ms,
+                success=True,
+            )
 
         yield f"data: {json.dumps({'type': 'sources', 'content': sources})}\n\n"
 
-        history_text = format_history([m.model_dump() for m in history])
-        chain = get_chain(course_name, course_id, page_context, current_user)
+        client_hist = [m.model_dump() for m in history]
+        if db and current_user:
+            db_hist = get_recent_history(db, current_user.id, course_id)
+            client_hist = merge_history(client_hist, db_hist)
+        history_text = format_history(client_hist)
+        chain = get_chain(course_name, course_id, ctx, current_user)
 
+        t_llm = time.perf_counter()
         async for event_type, content in _stream_tokens(
             chain, {"context": context, "question": message, "history": history_text}
         ):
@@ -155,7 +191,27 @@ async def stream_rag_response(
                 yield f"data: {json.dumps({'type': 'token', 'content': content})}\n\n"
             elif event_type == 'action':
                 yield f"data: {json.dumps({'type': 'action', 'action': 'navigate', 'path': content})}\n\n"
-            # 'full' — не отправляем клиенту
+            elif event_type == 'full':
+                full_response = content
+
+        llm_ms = (time.perf_counter() - t_llm) * 1000
+        if db and current_user:
+            record_metric(
+                db,
+                event_type="chat_llm",
+                user_id=current_user.id,
+                course_id=course_id,
+                duration_ms=llm_ms,
+                success=True,
+            )
+            save_exchange(
+                db,
+                user_id=current_user.id,
+                course_id=course_id,
+                page_context=ctx,
+                user_message=message,
+                assistant_message=_strip_nav_tags(full_response),
+            )
 
         yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
@@ -174,20 +230,32 @@ async def stream_rag_response(
         yield f"data: {json.dumps({'type': 'error', 'content': msg})}\n\n"
 
 
-from fastapi import APIRouter, HTTPException, Depends
-from fastapi.responses import StreamingResponse, Response
-from app.services.auth_service import get_current_user_optional
-from app.models.user import User
+@router.get("/chat/history", response_model=list[ChatHistoryMessage])
+def chat_history(
+    course_id: str = Query("default"),
+    limit: int = Query(12, ge=1, le=40),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_optional),
+):
+    if not current_user:
+        return []
+    rows = get_recent_history(db, current_user.id, course_id, limit=limit)
+    return [ChatHistoryMessage(**r) for r in rows]
+
 
 @router.post("/chat/stream")
-async def chat_stream(request: ChatRequest, current_user: User = Depends(get_current_user_optional)):
-    # pass user info into rag service later
+async def chat_stream(
+    request: ChatRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_optional),
+):
     return StreamingResponse(
         stream_rag_response(
             request.message, request.history,
             request.course_id, request.course_name,
             request.page_context,
-            current_user
+            current_user,
+            db,
         ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
@@ -204,15 +272,26 @@ async def stream_rag_voice_response(
     course_id: str,
     course_name: str,
     page_context: dict = {},
-    current_user: User = None
+    current_user: User = None,
+    db: Session | None = None,
 ) -> AsyncIterator[str]:
+    full_response = ""
     try:
+        ctx = dict(page_context or {})
+        if current_user and current_user.role == UserRole.student.value and db:
+            block = build_weak_topics_prompt_block(db, current_user.id, course_id)
+            if block:
+                ctx["weak_topics_prompt"] = block
+
         _docs, context, sources = await retrieve_context_for_chat(message, course_id)
 
         yield f"data: {json.dumps({'type': 'sources', 'content': sources})}\n\n"
 
-        history_text = format_history([m.model_dump() for m in history])
-        chain = get_chain(course_name, course_id, page_context, current_user)
+        client_hist = [m.model_dump() for m in history]
+        if db and current_user:
+            client_hist = merge_history(client_hist, get_recent_history(db, current_user.id, course_id))
+        history_text = format_history(client_hist)
+        chain = get_chain(course_name, course_id, ctx, current_user)
 
         sentence_buffer = ""
         # Конец предложения ИЛИ запятая/точка с запятой при буфере > 35 символов (живее ритм речи)
@@ -245,6 +324,8 @@ async def stream_rag_voice_response(
 
             elif event_type == 'action':
                 yield f"data: {json.dumps({'type': 'action', 'action': 'navigate', 'path': content})}\n\n"
+            elif event_type == 'full':
+                full_response = content
 
         # Озвучиваем остаток
         sentence_buffer = sentence_buffer.strip()
@@ -253,6 +334,16 @@ async def stream_rag_voice_response(
             if audio_bytes:
                 audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
                 yield f"data: {json.dumps({'type': 'sentence', 'text': sentence_buffer, 'audio_b64': audio_b64})}\n\n"
+
+        if db and current_user and full_response:
+            save_exchange(
+                db,
+                user_id=current_user.id,
+                course_id=course_id,
+                page_context=ctx,
+                user_message=message,
+                assistant_message=_strip_nav_tags(full_response),
+            )
 
         yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
@@ -272,13 +363,18 @@ async def stream_rag_voice_response(
 
 
 @router.post("/chat/voice")
-async def chat_voice(request: ChatRequest, current_user: User = Depends(get_current_user_optional)):
+async def chat_voice(
+    request: ChatRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_optional),
+):
     return StreamingResponse(
         stream_rag_voice_response(
             request.message, request.history,
             request.course_id, request.course_name,
             request.page_context,
-            current_user
+            current_user,
+            db,
         ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},

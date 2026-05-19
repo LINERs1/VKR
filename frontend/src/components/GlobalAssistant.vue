@@ -1,9 +1,9 @@
 <script setup>
 import { ref, nextTick, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { UltravoxSession } from 'ultravox-client'
+import { UltravoxSession, AgentReaction } from 'ultravox-client'
 import { useAuth } from '../composables/useAuth'
-import { hwApi } from '../api'
+import { hwApi, chatApi, analyticsApi } from '../api'
 
 const route = useRoute()
 const router = useRouter()
@@ -149,58 +149,121 @@ const pageContext = computed(() => ({
   }))
 }))
 
-watch(() => [route.path, route.params.id], async ([newPath, newId]) => {
-  if (newPath.startsWith('/homeworks/') && newId) {
-    currentPage.value = 'homework'
-    courseId.value    = window.currentHomeworkContext?.courseId || 'default'
-    courseName.value  = window.currentHomeworkContext?.title || 'Домашнее задание'
-    courseIcon.value  = '📝'
+/** Синхронизирует currentPage/courseId с фактическим URL (в т.ч. после навигации без активного ассистента). */
+async function refreshPageContextFromRoute() {
+  const path = route.path
+  const id = route.params.id
+
+  if (path.startsWith('/homeworks/workshop')) {
+    currentPage.value = id ? 'Редактор шаблона ДЗ' : 'Мастерская домашних заданий'
+    courseId.value = 'default'
+    courseName.value = 'Мастерская ДЗ'
+    courseIcon.value = '🛠️'
     return
   }
-  
-  if (newPath.startsWith('/courses/') && newId) {
-    currentPage.value = 'course'
+
+  if (/^\/homeworks\/\d+/.test(path)) {
+    currentPage.value = 'Домашнее задание'
+    const hw = window.currentHomeworkContext
+    courseId.value = hw?.courseId || 'default'
+    courseName.value = hw?.title || 'Домашнее задание'
+    courseIcon.value = '📝'
+    return
+  }
+
+  if (path === '/homeworks' || path.startsWith('/homeworks')) {
+    currentPage.value = 'Список домашних заданий'
+    courseId.value = 'default'
+    courseName.value = 'Домашние задания'
+    courseIcon.value = '📝'
+    return
+  }
+
+  if (path.startsWith('/courses/') && id) {
+    currentPage.value = 'Курс'
     try {
-      const res = await fetch(`/api/courses/${newId}`)
+      const token = localStorage.getItem('token')
+      const headers = token ? { Authorization: `Bearer ${token}` } : {}
+      const res = await fetch(`/api/courses/${id}`, { headers })
       if (res.ok) {
         const data = await res.json()
-        courseId.value   = data.id
+        courseId.value = data.id
         courseName.value = data.title
-        courseIcon.value = data.icon
+        courseIcon.value = data.icon || '📚'
       }
-    } catch (e) {}
-  } else if (newPath.startsWith('/journal')) {
-    currentPage.value = 'Журнал успеваемости'
-    courseId.value    = 'default'
-    courseName.value  = 'Журнал'
-    courseIcon.value  = '📊'
-  } else if (newPath.startsWith('/profile')) {
-    currentPage.value = 'Профиль пользователя'
-    courseId.value    = 'default'
-    courseName.value  = 'Профиль'
-    courseIcon.value  = '👤'
-  } else if (newPath === '/') {
-    currentPage.value = 'Главная страница'
-    courseId.value    = 'default'
-    courseName.value  = 'EduAI'
-    courseIcon.value  = '🤖'
-    window.currentCourseLessonContext = null
-  } else if (!newPath.startsWith('/courses/')) {
-    window.currentCourseLessonContext = null
-  } else {
-    currentPage.value = 'Неизвестная страница'
-    courseId.value    = 'default'
-    courseName.value  = 'EduAI'
-    courseIcon.value  = '🤖'
+    } catch (e) {
+      console.warn('[page context] course fetch failed', e)
+    }
+    return
   }
-}, { immediate: true })
+
+  if (path.startsWith('/journal')) {
+    currentPage.value = 'Журнал успеваемости'
+    courseId.value = 'default'
+    courseName.value = 'Журнал'
+    courseIcon.value = '📊'
+    window.currentCourseLessonContext = null
+    return
+  }
+
+  if (path.startsWith('/students/') && id) {
+    currentPage.value = 'Профиль ученика'
+    courseId.value = 'default'
+    courseName.value = 'Профиль ученика'
+    courseIcon.value = '👤'
+    window.currentCourseLessonContext = null
+    return
+  }
+
+  if (path.startsWith('/profile')) {
+    currentPage.value = 'Профиль пользователя'
+    courseId.value = 'default'
+    courseName.value = 'Профиль'
+    courseIcon.value = '👤'
+    window.currentCourseLessonContext = null
+    return
+  }
+
+  if (path === '/') {
+    currentPage.value = 'Главная страница'
+    courseId.value = 'default'
+    courseName.value = 'EduAI'
+    courseIcon.value = '🤖'
+    window.currentCourseLessonContext = null
+    return
+  }
+
+  if (!path.startsWith('/courses/')) {
+    window.currentCourseLessonContext = null
+  }
+  currentPage.value = 'Страница приложения'
+  courseId.value = 'default'
+  courseName.value = 'EduAI'
+  courseIcon.value = '🤖'
+}
+
+watch(
+  () => [route.path, route.params.id, route.fullPath],
+  async () => {
+    await refreshPageContextFromRoute()
+    await loadChatHistory()
+    if (voiceMode.value) {
+      if (skipNextRouteContextPush) {
+        skipNextRouteContextPush = false
+      } else {
+        scheduleVoicePageContextPush(200, true)
+      }
+    }
+  },
+  { immediate: true },
+)
 
 if (typeof window !== 'undefined') {
   window.addEventListener('eduai-homework-context', () => {
     if (route.path.startsWith('/homeworks/')) {
-      courseId.value = window.currentHomeworkContext?.courseId || 'default'
-      courseName.value = window.currentHomeworkContext?.title || 'Домашнее задание'
-      if (voiceMode.value) scheduleVoicePageContextPush(200, true)
+      void refreshPageContextFromRoute().then(() => {
+        if (voiceMode.value) scheduleVoicePageContextPush(200, true)
+      })
     }
   })
 }
@@ -209,6 +272,33 @@ if (typeof window !== 'undefined') {
 const isOpen    = ref(false)
 const history   = ref([])
 const message   = ref('')
+
+async function loadChatHistory() {
+  const cid = courseId.value
+  if (!cid || cid === 'default') {
+    history.value = []
+    return
+  }
+  try {
+    const u = user.value || (await fetchUser())
+    if (!u) return
+    const rows = await chatApi.getHistory(cid, 12)
+    if (courseId.value !== cid) return
+    history.value = (rows || []).map((r) => ({ role: r.role, content: r.content, sources: [] }))
+  } catch (_) {}
+}
+
+function recordNavMetric(success, path) {
+  analyticsApi
+    .postEvent({
+      event_type: 'voice_navigation',
+      course_id: courseId.value !== 'default' ? courseId.value : null,
+      success: !!success,
+      meta: { path: String(path || '').slice(0, 200) },
+    })
+    .catch(() => {})
+}
+
 const isBusy    = ref(false)
 const errorText = ref('')
 const threadEl  = ref(null)
@@ -220,7 +310,9 @@ const canSend = computed(() => message.value.trim().length > 0 && !isBusy.value)
 
 function togglePanel() {
   if (voiceMode.value) { stopVoiceMode(); return }
-  isOpen.value = !isOpen.value
+  const opening = !isOpen.value
+  isOpen.value = opening
+  if (opening) void refreshPageContextFromRoute()
 }
 function closePanel() { isOpen.value = false }
 
@@ -255,7 +347,19 @@ const voiceVolumePct = computed({
 })
 let lastVoiceNavPath = null
 let voiceUserHasSpoken = false
+const VOICE_IDLE_MS = 30_000
+let voiceIdleTimer = null
 let pendingNavPath = null
+let skipNextRouteContextPush = false
+let voiceNavHandledAt = 0
+
+function markVoiceNavHandled() {
+  voiceNavHandledAt = Date.now()
+}
+
+function isRecentVoiceNav() {
+  return Date.now() - voiceNavHandledAt < 3500
+}
 
 const STATIC_NAV_PATHS = ['/', '/profile', '/journal', '/homeworks']
 const VOICE_YES_RE = /\b(да|давай|ок|окей|конечно|переводи|открывай|хорошо|ага|угу)\b/ui
@@ -289,11 +393,39 @@ function lastVisibleUserTranscript(transcripts) {
 function stripNavFromSpeech(text) {
   if (!text) return ''
   return String(text)
-    .replace(/\[NAVIGATE:[^\]]+\]/gi, '')
-    .replace(/\bNAVIGATE\s*:?\s*\/?\s*[^\s\],.]*/gi, '')
-    .replace(/\bnavigate\s+(?:to\s+)?\/?\s*[^\s\],.]*/gi, '')
+    .replace(/\[NAVIGATE:[^\]]*\]?/gi, '')
+    .replace(/\bNAVIGATE\s*:?\s*\/?\s*[\w/.?=&-]*/gi, '')
+    .replace(/\bnavigate\s*(?:to|:)?\s*\/?\s*[\w/.?=&-]*/gi, '')
+    .replace(/\bnavigate\s+page\b/gi, '')
+    .replace(/\b(?:вызов|вызови|вызываю)\s+navigate\w*/gi, '')
     .replace(/\s{2,}/g, ' ')
+    .replace(/^[\s,.:;—-]+|[\s,.:;—-]+$/g, '')
     .trim()
+}
+
+function runVoiceNavigate(params) {
+  const raw = String(params?.path || params?.route || params?.url || '').trim()
+  if (!raw) {
+    return {
+      result: 'Ошибка: не указан path. Передай path вида /journal или /courses/python?lesson=2',
+      responseType: 'tool-response',
+      agentReaction: AgentReaction.SPEAKS,
+    }
+  }
+  const ok = tryVoiceNavigate(raw)
+  if (ok) {
+    return {
+      result:
+        'Переход выполнен. Страница уже открыта. Не повторяй вслух переход и не комментируй смену экрана.',
+      responseType: 'tool-response',
+      agentReaction: AgentReaction.LISTENS,
+    }
+  }
+  return {
+    result: 'Переход не выполнен: путь не распознан. Уточни у пользователя или выбери путь из списка.',
+    responseType: 'tool-response',
+    agentReaction: AgentReaction.SPEAKS,
+  }
 }
 
 function lastVisibleAgentTranscript(transcripts) {
@@ -361,7 +493,10 @@ function detectStaticNavInText(text) {
   if (!wantsNav) return null
   if (/главн|домой|\bhome\b/i.test(lower)) return '/'
   if (/профил/i.test(lower)) return '/profile'
-  if (/журнал/i.test(lower)) return '/journal'
+  if (/журнал/i.test(lower)) {
+    if (user.value?.role === 'student') return null
+    return '/journal'
+  }
   if (/домашн/i.test(lower)) return '/homeworks'
   return null
 }
@@ -469,6 +604,7 @@ function tryVoiceNavigate(rawPath) {
   const target = parseNavTarget(rawPath)
   if (!target) {
     console.warn('[nav] неизвестный путь:', rawPath)
+    recordNavMetric(false, rawPath)
     return false
   }
 
@@ -480,15 +616,18 @@ function tryVoiceNavigate(rawPath) {
 
   if (samePath && sameLesson) {
     pendingNavPath = null
-    scheduleVoicePageContextPush(300, true)
+    if (!isRecentVoiceNav()) scheduleVoicePageContextPush(300, true)
     return true
   }
 
   if (String(rawPath) === lastVoiceNavPath) return true
   lastVoiceNavPath = String(rawPath)
   pendingNavPath = null
+  markVoiceNavHandled()
+  skipNextRouteContextPush = true
+  recordNavMetric(true, targetPath)
   router.push(target)
-  scheduleVoicePageContextPush(700, true)
+  scheduleVoicePageContextPush(900, true)
   return true
 }
 
@@ -533,6 +672,8 @@ function buildVoiceContextMessage() {
           ? `- Домашнее задание: «${hw.title}»${quizCount ? `, тестов: ${quizCount}` : ''}. Выберите ученика или откройте форму ответа.\n`
           : ''
   return `[СИСТЕМА: обновление контекста страницы]
+ВАЖНО: это тихое обновление. Не отвечай вслух, не повторяй «открываю», «перехожу» и т.п. Жди реплику пользователя.
+
 Пользователь сейчас здесь:
 - Страница: ${currentPage.value}
 - URL: ${route.path}
@@ -822,6 +963,23 @@ function syncVoiceTranscriptsToHistory() {
   if (added && isOpen.value) scrollBottom()
 }
 
+function clearVoiceIdleTimer() {
+  if (voiceIdleTimer) {
+    clearTimeout(voiceIdleTimer)
+    voiceIdleTimer = null
+  }
+}
+
+function resetVoiceIdleTimer() {
+  clearVoiceIdleTimer()
+  if (!voiceMode.value || voiceState.value !== 'LISTENING') return
+  voiceIdleTimer = setTimeout(() => {
+    if (!voiceMode.value || voiceState.value !== 'LISTENING') return
+    voiceError.value = 'Звонок завершён из‑за тишины. Нажмите 🎤, чтобы снова поговорить с Кортаной.'
+    stopVoiceMode({ preserveError: true })
+  }, VOICE_IDLE_MS)
+}
+
 function scheduleVoicePageContextPush(delay = 450, force = false) {
   if (!voiceMode.value) return
   clearTimeout(voiceContextTimer)
@@ -847,6 +1005,7 @@ async function startUltravoxSession() {
     voiceUserHasSpoken = false
     pendingNavPath = null
 
+    await refreshPageContextFromRoute()
     if (!allCourses.value.length) await loadAllCourses()
 
     voiceSessionId = crypto.randomUUID()
@@ -883,7 +1042,11 @@ async function startUltravoxSession() {
     voiceHistorySyncedOrdinals = new Set()
 
     uvSession = new UltravoxSession()
-    uvSession.registerToolImplementation('getPageContext', () => buildVoiceContextMessage())
+    uvSession.registerToolImplementation('getPageContext', async () => {
+      await refreshPageContextFromRoute()
+      return buildVoiceContextMessage()
+    })
+    uvSession.registerToolImplementation('navigatePage', (params) => runVoiceNavigate(params))
     uvSession.registerToolImplementation('queryKnowledgeBase', (params) => runVoiceRagQuery(params))
     uvSession.registerToolImplementation('reviewHomework', () => runVoiceHomeworkReview())
     uvSession.registerToolImplementation('getTeacherSummary', () => runTeacherSummary())
@@ -897,15 +1060,19 @@ async function startUltravoxSession() {
       const status = uvSession.status
       if (status === 'idle' || status === 'disconnected') {
         voiceState.value = 'IDLE'
+        clearVoiceIdleTimer()
       } else if (status === 'listening') {
         voiceState.value = 'LISTENING'
         isHearingSpeech.value = true
+        resetVoiceIdleTimer()
       } else if (status === 'thinking') {
         voiceState.value = 'THINKING'
         isHearingSpeech.value = false
+        clearVoiceIdleTimer()
       } else if (status === 'speaking') {
         voiceState.value = 'SPEAKING'
         isHearingSpeech.value = false
+        clearVoiceIdleTimer()
       }
       burstApplyVoiceVolume()
     })
@@ -924,6 +1091,7 @@ async function startUltravoxSession() {
           return
         }
         voiceUserHasSpoken = true
+        resetVoiceIdleTimer()
         voiceTranscript.value = last.text
         const userText = (last.text || '').trim()
         if (VOICE_YES_RE.test(userText) && pendingNavPath) {
@@ -942,9 +1110,9 @@ async function startUltravoxSession() {
         let navPath = extractNavPathFromText(raw)
         if (!navPath) navPath = detectLessonPathInText(display) || detectLessonPathInText(raw)
         if (!navPath) navPath = detectStaticNavInText(display)
-        if (navPath) {
+        if (navPath && !isRecentVoiceNav()) {
           tryVoiceNavigate(navPath)
-        } else {
+        } else if (!navPath) {
           const offer = detectCourseOfferInText(display) || detectLessonPathInText(display)
           if (offer) pendingNavPath = offer
         }
@@ -971,6 +1139,7 @@ async function startUltravoxSession() {
     })
 
     voiceState.value = 'LISTENING'
+    resetVoiceIdleTimer()
     scheduleVoicePageContextPush(600, true)
 
   } catch (err) {
@@ -983,6 +1152,7 @@ async function startUltravoxSession() {
 
 async function stopUltravoxSession() {
   syncVoiceTranscriptsToHistory()
+  clearVoiceIdleTimer()
   clearTimeout(voiceContextTimer)
   voiceContextTimer = null
   voiceSessionId = null
@@ -1366,6 +1536,7 @@ function onLessonChanged() {
 }
 
 onMounted(() => {
+  loadIslandPosition()
   loadAllCourses()
   fetchUser().then(() => loadHomeworkReminders())
   window.addEventListener('beforeunload', forceCleanup)
@@ -1373,6 +1544,10 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  window.removeEventListener('pointermove', onIslandWindowPointerMove)
+  window.removeEventListener('pointerup', onIslandWindowPointerUp)
+  window.removeEventListener('pointercancel', onIslandWindowPointerUp)
+  if (islandClickTimer) clearTimeout(islandClickTimer)
   document.documentElement.classList.remove('eduai-voice-active', 'island-expanded-page')
   forceCleanup()
   window.removeEventListener('beforeunload', forceCleanup)
@@ -1380,7 +1555,7 @@ onUnmounted(() => {
 })
 
 // ─── Voice Mode (Ultravox) ─────────────────────────────────────────────────
-function startVoiceMode() {
+async function startVoiceMode() {
   isOpen.value = false
   voiceMode.value = true
   voiceError.value = ''
@@ -1391,13 +1566,16 @@ function startVoiceMode() {
   lastPushedVoiceContextKey = ''
   voiceUserHasSpoken = false
   pendingNavPath = null
+  await refreshPageContextFromRoute()
   startUltravoxSession()
 }
 
-function stopVoiceMode() {
+function stopVoiceMode(opts = {}) {
+  const preserveError = opts.preserveError === true
+  clearVoiceIdleTimer()
   voiceMode.value = false
   voiceState.value = 'IDLE'
-  voiceError.value = ''
+  if (!preserveError) voiceError.value = ''
   voiceTranscript.value = ''
   voiceAssistantText.value = ''
   stopUltravoxSession()
@@ -1672,6 +1850,8 @@ async function sendStream() {
   message.value   = ''
   errorText.value = ''
 
+  await refreshPageContextFromRoute()
+
   const stripped = stripWakePrefix(raw)
   const userText = stripped.length ? stripped : (raw ? 'Привет!' : '')
 
@@ -1747,7 +1927,120 @@ async function sendStream() {
 }
 
 // ─── Dynamic Island ─────────────────────────────────────────────────────────
-function onIslandClick() { voiceMode.value ? stopVoiceMode() : startVoiceMode() }
+const ISLAND_POS_KEY = 'eduai-island-position'
+const islandContainerRef = ref(null)
+const islandPos = ref(null)
+const islandDragging = ref(false)
+let islandDragStart = null
+let islandDragMoved = false
+let islandClickTimer = null
+
+function islandAnchorFromRect(rect) {
+  return { left: rect.left + rect.width / 2, top: rect.top }
+}
+
+function loadIslandPosition() {
+  try {
+    const raw = localStorage.getItem(ISLAND_POS_KEY)
+    if (!raw) return
+    const p = JSON.parse(raw)
+    if (typeof p?.left === 'number' && typeof p?.top === 'number') {
+      islandPos.value = { left: p.left, top: p.top }
+    }
+  } catch (_) {}
+}
+
+function saveIslandPosition() {
+  if (!islandPos.value) return
+  localStorage.setItem(ISLAND_POS_KEY, JSON.stringify(islandPos.value))
+}
+
+function clampIslandPosition(left, top) {
+  const margin = 12
+  const w = 220
+  const h = 80
+  return {
+    left: Math.min(window.innerWidth - margin, Math.max(margin + w / 2, left)),
+    top: Math.min(window.innerHeight - margin, Math.max(margin, top)),
+  }
+}
+
+function onIslandPointerDown(e) {
+  if (e.button !== 0) return
+  e.stopPropagation()
+  const container = islandContainerRef.value
+  if (!container) return
+  const rect = container.getBoundingClientRect()
+  const anchor = islandPos.value ?? islandAnchorFromRect(rect)
+  islandDragStart = {
+    pointerId: e.pointerId,
+    x: e.clientX,
+    y: e.clientY,
+    left: anchor.left,
+    top: anchor.top,
+  }
+  islandDragMoved = false
+  window.addEventListener('pointermove', onIslandWindowPointerMove)
+  window.addEventListener('pointerup', onIslandWindowPointerUp)
+  window.addEventListener('pointercancel', onIslandWindowPointerUp)
+}
+
+function onIslandWindowPointerMove(e) {
+  if (!islandDragStart || islandDragStart.pointerId !== e.pointerId) return
+  const dx = e.clientX - islandDragStart.x
+  const dy = e.clientY - islandDragStart.y
+  if (!islandDragMoved && Math.hypot(dx, dy) < 8) return
+  if (!islandDragMoved) {
+    islandDragMoved = true
+    islandDragging.value = true
+  }
+  islandPos.value = clampIslandPosition(
+    islandDragStart.left + dx,
+    islandDragStart.top + dy,
+  )
+}
+
+function onIslandWindowPointerUp(e) {
+  if (!islandDragStart || islandDragStart.pointerId !== e.pointerId) return
+  window.removeEventListener('pointermove', onIslandWindowPointerMove)
+  window.removeEventListener('pointerup', onIslandWindowPointerUp)
+  window.removeEventListener('pointercancel', onIslandWindowPointerUp)
+
+  if (islandDragMoved) {
+    saveIslandPosition()
+  } else {
+    if (islandClickTimer) clearTimeout(islandClickTimer)
+    islandClickTimer = setTimeout(() => {
+      islandClickTimer = null
+      onIslandClick()
+    }, 220)
+  }
+
+  islandDragStart = null
+  islandDragging.value = false
+}
+
+function resetIslandPosition() {
+  if (islandClickTimer) {
+    clearTimeout(islandClickTimer)
+    islandClickTimer = null
+  }
+  islandPos.value = null
+  localStorage.removeItem(ISLAND_POS_KEY)
+}
+
+function onIslandClick() {
+  voiceMode.value ? stopVoiceMode() : startVoiceMode()
+}
+
+const islandContainerStyle = computed(() => {
+  if (!islandPos.value) return null
+  return {
+    left: `${islandPos.value.left}px`,
+    top: `${islandPos.value.top}px`,
+    transform: 'translate(-50%, 0)',
+  }
+})
 
 function clearHistory() {
   history.value = []
@@ -1765,12 +2058,16 @@ function sendSuggestion(text) { message.value = text; sendStream() }
 function executeAction(evt) {
   if (evt.action !== 'navigate' || evt.path === undefined || evt.path === null) return
   const path = resolveNavigatePath(evt.path)
-  if (!path) return
+  if (!path) {
+    recordNavMetric(false, evt.path)
+    return
+  }
+  recordNavMetric(true, path)
   const delay = voiceMode.value ? 500 : 300
-    setTimeout(() => {
+  setTimeout(() => {
     if (voiceMode.value) stopVoiceMode()
     router.push(path)
-    }, delay)
+  }, delay)
 }
 
 // ─── Computed ──────────────────────────────────────────────────────────────
@@ -1954,22 +2251,34 @@ function onOrbPointerUp(e) {
 
     <!-- ══════════════════════ DYNAMIC ISLAND (iPhone-style) -->
     <div
+      ref="islandContainerRef"
       class="island-system-container"
-      :class="{ 'is-expanded': islandExpanded, 'is-voice': voiceMode }"
+      :class="{
+        'is-expanded': islandExpanded,
+        'is-voice': voiceMode,
+        'is-custom-pos': !!islandPos,
+        'is-dragging': islandDragging,
+      }"
+      :style="islandContainerStyle"
+      @dblclick.stop.prevent="resetIslandPosition"
     >
+      <div
+        class="island-rgb-shell"
+        :class="{ active: voiceMode, expanded: islandExpanded }"
+      >
       <div class="island-stack" :class="{ expanded: islandExpanded }">
       <!-- Main Island -->
       <div
         class="dynamic-island"
-      :class="{
+        :class="{
           'island-voice': voiceMode,
           'island-listening': voiceMode && voiceState === 'LISTENING',
           'island-thinking': voiceMode && voiceState === 'THINKING',
           'island-speaking': voiceMode && voiceState === 'SPEAKING',
           'island-compact': !islandExpanded,
         }"
-        @click="onIslandClick"
-        :title="voiceMode ? 'Завершить звонок' : 'Голосовой ассистент'"
+        @pointerdown="onIslandPointerDown"
+        :title="voiceMode ? 'Завершить звонок (перетащите капсулу, чтобы переместить)' : 'Голосовой ассистент (перетащите капсулу, чтобы переместить)'"
       >
         <!-- Иконка/Волна -->
         <span class="island-icon" v-if="!voiceMode">
@@ -2019,6 +2328,7 @@ function onOrbPointerUp(e) {
           </div>
         </div>
       </transition>
+      </div>
       </div>
     </div>
 
@@ -2093,6 +2403,25 @@ function onOrbPointerUp(e) {
 }
 
 /* ─── Dynamic Island (iPhone-style) ─────────────────── */
+@property --island-rgb-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+
+@keyframes islandRgbSpin {
+  to {
+    --island-rgb-angle: 360deg;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .island-rgb-shell.active {
+    animation: none;
+    background: linear-gradient(120deg, #6366f1, #22d3ee, #c084fc, #fb7185);
+  }
+}
+
 .island-system-container {
   position: fixed;
   top: max(10px, env(safe-area-inset-top, 0px));
@@ -2103,29 +2432,91 @@ function onOrbPointerUp(e) {
   flex-direction: column;
   align-items: center;
   pointer-events: none;
-  transition: top 0.45s cubic-bezier(0.32, 0.72, 0, 1);
+  transition:
+    top 0.45s cubic-bezier(0.32, 0.72, 0, 1),
+    left 0.35s cubic-bezier(0.32, 0.72, 0, 1),
+    transform 0.35s cubic-bezier(0.32, 0.72, 0, 1);
+  touch-action: manipulation;
 }
 
-.island-system-container.is-voice.is-expanded {
+.island-system-container.is-custom-pos {
+  left: auto;
+}
+
+.island-system-container.is-dragging {
+  touch-action: none;
+  transition: none !important;
+}
+
+.island-system-container.is-voice.is-expanded:not(.is-custom-pos) {
   top: max(76px, calc(env(safe-area-inset-top, 0px) + 64px));
+}
+
+.island-rgb-shell {
+  position: relative;
+  border-radius: 999px;
+  pointer-events: auto;
+}
+
+.island-rgb-shell.active {
+  padding: 2px;
+  border-radius: 999px;
+  background: conic-gradient(
+    from var(--island-rgb-angle),
+    #6366f1,
+    #22d3ee,
+    #c084fc,
+    #fb7185,
+    #fbbf24,
+    #6366f1
+  );
+  animation: islandRgbSpin 3.2s linear infinite;
+  box-shadow:
+    0 0 18px rgba(99, 102, 241, 0.45),
+    0 0 36px rgba(34, 211, 238, 0.2),
+    0 8px 28px rgba(0, 0, 0, 0.45);
+}
+
+.island-rgb-shell.active.expanded {
+  border-radius: 30px;
+}
+
+.island-rgb-shell.active::after {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  border-radius: inherit;
+  background: radial-gradient(ellipse at 50% 0%, rgba(255, 255, 255, 0.06), transparent 55%);
+  pointer-events: none;
+  z-index: 0;
 }
 
 .island-stack {
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  pointer-events: auto;
-  filter: drop-shadow(0 8px 28px rgba(0, 0, 0, 0.45));
+  position: relative;
+  z-index: 1;
+  filter: drop-shadow(0 4px 16px rgba(0, 0, 0, 0.35));
   transition: transform 0.45s cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.island-rgb-shell:not(.active) .island-stack {
+  filter: drop-shadow(0 8px 28px rgba(0, 0, 0, 0.45));
 }
 
 .island-stack.expanded {
   background: #0a0a0a;
   border-radius: 28px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.06);
   overflow: hidden;
   min-width: 300px;
   max-width: min(420px, calc(100vw - 32px));
+}
+
+.island-rgb-shell.active .island-stack.expanded {
+  border: none;
+  border-radius: 28px;
 }
 
 .dynamic-island {
@@ -2147,6 +2538,10 @@ function onOrbPointerUp(e) {
   z-index: 2;
 }
 
+.island-system-container.is-dragging .dynamic-island {
+  cursor: grabbing;
+}
+
 .island-stack.expanded .dynamic-island {
   border-radius: 0;
   background: transparent;
@@ -2160,9 +2555,19 @@ function onOrbPointerUp(e) {
 }
 
 .island-voice { min-width: 168px; }
-.island-listening { background: #1c1c1e; }
-.island-thinking { background: #2c2c2e; }
-.island-speaking { background: #1c1c1e; }
+.island-listening { background: #141416; }
+.island-thinking { background: #1a1a1e; }
+.island-speaking { background: #141416; }
+
+.island-rgb-shell.active .island-listening {
+  background: linear-gradient(180deg, #1a1a22 0%, #0d0d10 100%);
+}
+.island-rgb-shell.active .island-thinking {
+  background: linear-gradient(180deg, #22222a 0%, #121216 100%);
+}
+.island-rgb-shell.active .island-speaking {
+  background: linear-gradient(180deg, #181820 0%, #0c0c0f 100%);
+}
 
 .island-icon, .island-label, .island-status-text {
   font-family: -apple-system, BlinkMacSystemFont, 'Inter', system-ui, sans-serif;

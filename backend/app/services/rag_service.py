@@ -12,6 +12,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from app.config import settings
 from app.services.llm_service import get_llm
 from app.utils.navigation_prompt import build_navigation_routes_list
+from app.utils.role_capabilities import build_role_capabilities_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -32,10 +33,7 @@ _PROMPT_TEMPLATE = (
     "3. Слова «Кортана», «Эдуай», «ассистент» в начале сообщения — обращение к тебе, не имя пользователя.\n"
     "4. Используй материалы курса. Если информации нет — скажи честно и помоги общими знаниями.\n"
     "5. Отвечай лаконично: 2–4 абзаца. Без лишней воды.\n\n"
-    "### ДОМАШНИЕ ЗАДАНИЯ\n"
-    "- Роль student: помогай с ДЗ наводящими вопросами, НЕ давай готовый код/решение.\n"
-    "- Роль teacher: полный разбор работы; ошибки оберни в "
-    '<span class="hw-error">фрагмент</span> (без markdown **).\n\n'
+    "{role_capabilities}\n"
     "### НАВИГАЦИЯ\n"
     "{page_info}\n\n"
     "ПРАВИЛА навигации:\n"
@@ -66,6 +64,7 @@ _GLOBAL_PROMPT_TEMPLATE = (
     "2. На приветствие и «как дела» — отвечай кратко своими словами.\n"
     "3. Слова «Кортана», «Эдуай», «ассистент» в начале сообщения — обращение к тебе, не имя пользователя.\n"
     "4. Рассказывай о курсах, помогай выбрать подходящий.\n\n"
+    "{role_capabilities}\n"
     "### НАВИГАЦИЯ\n"
     "{page_info}\n\n"
     "ПРАВИЛА навигации:\n"
@@ -164,13 +163,19 @@ def get_chain(course_name: str = None, course_id: str = "default", page_context:
         page_info_parts.append("(Учитывай это при ответах. Если пользователь спрашивает 'где я?', скажи ему это).\n")
     
     available = page_context.get("available_courses", [])
-    page_info_parts.append(build_navigation_routes_list(available))
+    user_role = current_user.role if current_user else None
+    page_info_parts.append(build_navigation_routes_list(available, role=user_role))
+    weak_block = (page_context or {}).get("weak_topics_prompt", "")
+    if weak_block:
+        page_info_parts.append(weak_block)
     page_info = "\n".join(page_info_parts) + "\n"
 
     user_info = "Пользователь не авторизован (Гость)."
     if current_user:
         role_ru = "Ученик" if current_user.role == "student" else "Преподаватель" if current_user.role == "teacher" else current_user.role
         user_info = f"Имя: {current_user.username}\nРоль: {role_ru} ({current_user.role})"
+
+    role_capabilities = build_role_capabilities_prompt(user_role)
 
     prompt = PromptTemplate(
         template=template,
@@ -180,7 +185,8 @@ def get_chain(course_name: str = None, course_id: str = "default", page_context:
             "course": name,
             "page_info": page_info,
             "user_info": user_info,
-        }
+            "role_capabilities": role_capabilities,
+        },
     )
     return prompt | get_llm() | StrOutputParser()
 
@@ -211,8 +217,33 @@ def format_history(history: list[dict]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Ingest — ИСПРАВЛЕН БАГ ДВОЙНОЙ ИНДЕКСАЦИИ
+# Ingest
 # ---------------------------------------------------------------------------
+
+def _indexed_source_exists(store: Chroma, source_name: str) -> bool:
+    """Проверка наличия документа в индексе без приватного API, где возможно."""
+    try:
+        if hasattr(store, "get"):
+            existing = store.get(where={"source": source_name})
+            ids = existing.get("ids") if isinstance(existing, dict) else None
+            if ids and len(ids) > 0:
+                return True
+    except Exception as e:
+        logger.debug("store.get failed for %s: %s", source_name, e)
+    try:
+        coll = getattr(store, "_collection", None)
+        if coll is not None:
+            existing = coll.get(where={"source": source_name})
+            if existing and existing.get("ids") and len(existing["ids"]) > 0:
+                return True
+    except Exception as e:
+        logger.debug("collection.get failed for %s: %s", source_name, e)
+    return False
+
+
+def _clear_vector_store_cache() -> None:
+    get_vector_store.cache_clear()
+
 
 def ingest_documents(directory: str, course_id: str = "default") -> dict:
     from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader, TextLoader
@@ -236,8 +267,7 @@ def ingest_documents(directory: str, course_id: str = "default") -> dict:
         if ext not in LOADERS:
             continue
         try:
-            existing = store._collection.get(where={"source": file_path.name})
-            if existing and existing.get("ids") and len(existing["ids"]) > 0:
+            if _indexed_source_exists(store, file_path.name):
                 continue
 
             docs = LOADERS[ext](str(file_path)).load()
@@ -256,7 +286,9 @@ def ingest_documents(directory: str, course_id: str = "default") -> dict:
     if total_chunks == 0:
         return {"status": "warning", "message": "Новых документов не найдено", "chunks": 0, "documents": 0}
 
+    _clear_vector_store_cache()
     return {"status": "success", "documents": total_docs, "chunks": total_chunks}
+
 
 def ingest_documents_from_db(course, db) -> dict:
     """
@@ -274,8 +306,7 @@ def ingest_documents_from_db(course, db) -> dict:
         source_name = f"lesson_{lesson.id}_{lesson.title}.txt"
         try:
             # Пропускаем уже проиндексированные файлы
-            existing = store._collection.get(where={"source": source_name})
-            if existing and existing.get("ids") and len(existing["ids"]) > 0:
+            if _indexed_source_exists(store, source_name):
                 logger.info(f"Пропуск (уже в индексе): {source_name}")
                 continue
 
@@ -300,4 +331,6 @@ def ingest_documents_from_db(course, db) -> dict:
         return {"status": "warning", "message": "Новых документов не найдено", "chunks": 0, "documents": 0}
 
     logger.info(f"Итого: {total_chunks} чанков из {total_docs} лекций (course={course.id})")
+    if total_chunks > 0:
+        _clear_vector_store_cache()
     return {"status": "success", "documents": total_docs, "chunks": total_chunks}

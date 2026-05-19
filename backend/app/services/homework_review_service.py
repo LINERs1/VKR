@@ -7,6 +7,7 @@ from pathlib import Path
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from app.constants import HOMEWORK_REVIEW_TEXT_LIMIT
 from app.models.homework import Homework, HomeworkAssignment
 from app.services.homework_template_service import parse_content
 from app.services.llm_service import get_homework_llm
@@ -122,7 +123,7 @@ def review_assignment(homework: Homework, assignment: HomeworkAssignment) -> dic
     quiz_section = _quiz_review_block(homework, assignment)
 
     user_prompt = f"""ЗАДАНИЕ:
-{homework.description[:4000]}
+{homework.description[:HOMEWORK_REVIEW_TEXT_LIMIT]}
 
 ---
 КОД УЧЕНИКА ({assignment.student.username}):

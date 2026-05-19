@@ -86,6 +86,25 @@
               placeholder="Текст вопроса…"
               @input="scheduleSave"
             />
+            <div class="quiz-meta-row">
+              <div class="quiz-meta-field">
+                <label class="mini-label">Тема (для адаптивности)</label>
+                <input
+                  v-model="q.topic"
+                  type="text"
+                  class="opt-input"
+                  placeholder="Например: циклы, функции…"
+                  @input="scheduleSave"
+                />
+              </div>
+              <div class="quiz-meta-field">
+                <label class="mini-label">Урок курса</label>
+                <select v-model="q.lesson_id" class="opt-input" @change="scheduleSave">
+                  <option :value="null">— не привязан —</option>
+                  <option v-for="l in lessonOptions" :key="l.id" :value="l.id">{{ l.title }}</option>
+                </select>
+              </div>
+            </div>
             <label class="mini-label">Варианты ответа</label>
             <div v-for="(opt, oi) in q.options" :key="oi" class="opt-row">
               <span class="opt-letter">{{ letter(oi) }}</span>
@@ -221,6 +240,11 @@ const form = ref({
 
 const previewHtml = computed(() => buildPreview(form.value))
 
+const lessonOptions = computed(() => {
+  const c = courses.value.find((x) => x.id === form.value.course_id)
+  return Array.isArray(c?.lessons) ? c.lessons : []
+})
+
 onMounted(async () => {
   const user = await fetchUser()
   if (!user || user.role !== 'teacher') return router.push('/homeworks')
@@ -301,11 +325,27 @@ function normalizeQuiz(q) {
   let ci = Number(q?.correct_index)
   if (Number.isNaN(ci)) ci = 0
   if (ci < 0 || ci >= options.length) ci = 0
-  return { question: String(q?.question || ''), options, correct_index: ci }
+  let lessonId = q?.lesson_id
+  if (lessonId === '' || lessonId === undefined) lessonId = null
+  else lessonId = Number(lessonId)
+  if (lessonId != null && Number.isNaN(lessonId)) lessonId = null
+  return {
+    question: String(q?.question || ''),
+    options,
+    correct_index: ci,
+    topic: String(q?.topic || '').trim(),
+    lesson_id: lessonId,
+  }
 }
 
 function addQuiz() {
-  form.value.content.quiz_items.push({ question: '', options: ['', ''], correct_index: 0 })
+  form.value.content.quiz_items.push({
+    question: '',
+    options: ['', ''],
+    correct_index: 0,
+    topic: '',
+    lesson_id: null,
+  })
   scheduleSave()
 }
 
@@ -542,6 +582,17 @@ function buildPreview(f) {
   border-radius: 12px;
   padding: 16px;
   margin-bottom: 16px;
+}
+.quiz-meta-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin: 10px 0 12px;
+}
+@media (max-width: 720px) {
+  .quiz-meta-row {
+    grid-template-columns: 1fr;
+  }
 }
 .quiz-card-head {
   display: flex;

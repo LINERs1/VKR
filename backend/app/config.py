@@ -1,3 +1,5 @@
+from functools import cached_property
+
 from pydantic_settings import BaseSettings
 from typing import List
 
@@ -74,7 +76,7 @@ class Settings(BaseSettings):
     # =========================================================
     ALLOWED_ORIGINS: str = "http://localhost:5173,http://localhost:3000,http://localhost:8080"
 
-    @property
+    @cached_property
     def cors_origins(self) -> List[str]:
         return [o.strip() for o in self.ALLOWED_ORIGINS.split(",") if o.strip()]
 

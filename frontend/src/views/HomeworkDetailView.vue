@@ -210,6 +210,7 @@ import { hwApi } from '../api'
 import {
   extractErrorFragments,
   highlightSubmission,
+  renderFeedbackHtml,
 } from '../utils/homeworkHighlight'
 
 const route = useRoute()
@@ -311,45 +312,7 @@ const studentHighlightedText = computed(() =>
   highlightSubmission(myAssignment.value?.student_text, activeFragments.value)
 )
 
-function normalizeFeedbackHtml(text) {
-  let t = String(text || '')
-  t = t.replace(
-    /<span\s+style=['"][^'"]*#ef4444[^'"]*['"][^>]*>([\s\S]*?)<\/span>/gi,
-    '<span class="hw-error">$1</span>'
-  )
-  if (!/class=["']hw-error["']/i.test(t)) {
-    t = t.replace(/\*\*([^*\n]+)\*\*/g, '<span class="hw-error">$1</span>')
-  }
-  return t
-}
-
-function renderFeedback(html) {
-  if (!html) return ''
-  const normalized = normalizeFeedbackHtml(html)
-  const chunks = []
-  let safe = normalized.replace(
-    /<span\s+class=["']hw-error["'][^>]*>([\s\S]*?)<\/span>/gi,
-    (_, inner) => {
-      const esc = String(inner)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-      chunks.push(`<span class="hw-error">${esc}</span>`)
-      return `__HW_ERR_${chunks.length - 1}__`
-    }
-  )
-  safe = safe
-    .replace(/<script[\s\S]*?<\/script>/gi, '')
-    .replace(/<[^>]+>/g, '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/\n/g, '<br>')
-  chunks.forEach((c, i) => {
-    safe = safe.replace(`__HW_ERR_${i}__`, c)
-  })
-  return safe
-}
+const renderFeedback = renderFeedbackHtml
 
 function syncHomeworkContext() {
   const a = isTeacher.value ? selectedAssignment.value : myAssignment.value

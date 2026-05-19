@@ -128,6 +128,7 @@ function isClickable(a) {
   <div class="journal-page">
     <header class="journal-header">
       <router-link to="/" class="btn-back">← На главную</router-link>
+      <router-link to="/analytics" class="btn-analytics">Метрики ассистента</router-link>
       <h1>Журнал успеваемости</h1>
       <p class="subtitle">Строки — домашние задания по курсам, столбцы — ученики</p>
     </header>
@@ -234,6 +235,17 @@ function isClickable(a) {
 
 .btn-back:hover {
   color: #fff;
+}
+
+.btn-analytics {
+  display: inline-block;
+  margin-left: 16px;
+  color: #a5b4fc;
+  text-decoration: none;
+  font-size: 14px;
+}
+.btn-analytics:hover {
+  color: #c7d2fe;
 }
 
 h1 {

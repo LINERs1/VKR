@@ -22,7 +22,9 @@ from app.models.user import User
 from app.models.course import Course
 from app.services.rag_service import get_retriever, format_docs
 from app.services.homework_journal_service import build_journal_summary, build_reminders
+from app.services.weak_topics_service import build_weak_topics_prompt_block
 from app.utils.navigation_prompt import build_navigation_prompt
+from app.utils.role_capabilities import build_role_capabilities_prompt
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -193,7 +195,8 @@ def _build_system_prompt(
         )
     page_info = "\n".join(page_info_lines)
 
-    nav_instructions = build_navigation_prompt(available_courses, voice=True)
+    role_caps = build_role_capabilities_prompt(role_en, voice=True)
+    nav_instructions = build_navigation_prompt(available_courses, voice=True, role=role_en)
 
     hw_rules = ""
     extra_tools = ""
@@ -208,6 +211,9 @@ def _build_system_prompt(
             rem = build_reminders(db, user)
             if rem.get("message"):
                 page_info_lines.append(f"НАПОМИНАНИЕ О ДЗ: {rem['message']}")
+            weak_block = build_weak_topics_prompt_block(db, user.id, req.course_id or "default")
+            if weak_block:
+                page_info_lines.append(weak_block)
         except Exception:
             pass
     else:
@@ -254,8 +260,13 @@ def _build_system_prompt(
 5. Для поиска по материалам курса используй инструмент queryKnowledgeBase.
 {f'6. {extra_tools}' if extra_tools else ''}
 
+{role_caps}
+
 ### ПРИВЕТСТВИЕ
-Если начинаешь разговор — скажи только: «{settings.ASSISTANT_GREETING}» Без тегов [NAVIGATE:...].
+Если начинаешь разговор — скажи только: «{settings.ASSISTANT_GREETING}» Без навигации и без слова navigate.
+
+### НАВИГАЦИЯ
+Переходы — только через инструмент navigatePage. Никогда не говори вслух navigate, NAVIGATE, path или URL.
 
 ### КОНТЕКСТ СТРАНИЦЫ
 {page_info}
@@ -319,6 +330,33 @@ async def create_ultravox_call(
     courses = _courses_for_prompt(req, db)
     system_prompt = _build_system_prompt(current_user, req, courses, db)
 
+    navigate_tool = {
+        "temporaryTool": {
+            "modelToolName": "navigatePage",
+            "description": (
+                "Переводит пользователя на страницу платформы (курс, урок, журнал, профиль, главная, ДЗ). "
+                "Сначала одной фразой по-русски скажи, куда переходишь («Открываю журнал»), затем вызови инструмент. "
+                "После вызова не повторяй переход и не комментируй смену экрана. "
+                "Не произноси navigate, NAVIGATE, path, URL или слэши."
+            ),
+            "dynamicParameters": [
+                {
+                    "name": "path",
+                    "location": "PARAMETER_LOCATION_BODY",
+                    "schema": {
+                        "description": (
+                            "Маршрут: /, /journal, /profile, /homeworks, "
+                            "/courses/{course_id} или /courses/{course_id}?lesson={lesson_id}"
+                        ),
+                        "type": "string",
+                    },
+                    "required": True,
+                },
+            ],
+            "client": {},
+        }
+    }
+
     page_context_tool = {
         "temporaryTool": {
             "modelToolName": "getPageContext",
@@ -355,7 +393,7 @@ async def create_ultravox_call(
         }
     }
 
-    selected_tools = [rag_tool, page_context_tool]
+    selected_tools = [rag_tool, page_context_tool, navigate_tool]
     if current_user.role == "teacher":
         selected_tools.append({
             "temporaryTool": {

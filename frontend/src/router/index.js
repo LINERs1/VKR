@@ -15,6 +15,7 @@ const router = createRouter({
     { path: '/homeworks/workshop/:id', component: () => import('../views/HomeworkWorkshopEditorView.vue'), meta: { requiresAuth: true, teacherOnly: true } },
     { path: '/homeworks/:id', component: () => import('../views/HomeworkDetailView.vue'), meta: { requiresAuth: true } },
     { path: '/journal', component: () => import('../views/JournalView.vue'), meta: { requiresAuth: true, teacherOnly: true } },
+    { path: '/analytics', component: () => import('../views/AnalyticsView.vue'), meta: { requiresAuth: true, teacherOnly: true } },
     { path: '/students/:id', component: () => import('../views/StudentProfileView.vue'), meta: { requiresAuth: true, teacherOnly: true } },
     { path: '/login', component: LoginView, meta: { requiresGuest: true } },
   ],

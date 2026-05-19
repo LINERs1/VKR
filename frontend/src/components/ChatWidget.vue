@@ -143,7 +143,13 @@ async function sendStream() {
 
   } catch (e) {
     errorText.value = e?.message ?? String(e)
-    if (!history.value[assistantIdx]?.content) history.value.pop()
+    const assistantEmpty = !history.value[assistantIdx]?.content?.trim()
+    if (assistantEmpty) {
+      history.value.splice(assistantIdx, 1)
+      if (history.value[assistantIdx - 1]?.role === 'user') {
+        history.value.splice(assistantIdx - 1, 1)
+      }
+    }
   } finally {
     isBusy.value = false
   }

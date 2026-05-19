@@ -2,11 +2,15 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { marked } from 'marked'
 import { useRoute, useRouter } from 'vue-router'
+import { useAuth } from '../composables/useAuth'
+import { adaptiveApi } from '../api'
 
 const route = useRoute()
 const router = useRouter()
+const { fetchUser } = useAuth()
 
 const course = ref(null)
+const weakBanner = ref(null)
 const currentLesson = ref(null)
 const loading = ref(true)
 const uploadStatus = ref('')
@@ -22,6 +26,7 @@ async function loadCourse(id) {
     course.value = await res.json()
     currentLesson.value = course.value.lessons[0]
     publishLessonContext()
+    await loadWeakTopics()
   } catch (e) {
     router.push('/')
   } finally {
@@ -67,6 +72,28 @@ function publishLessonContext() {
     courseId: course.value.id,
   }))
   window.dispatchEvent(new CustomEvent('eduai-lesson-changed'))
+}
+
+async function loadWeakTopics() {
+  try {
+    const u = await fetchUser()
+    if (!u || u.role !== 'student' || !course.value) {
+      weakBanner.value = null
+      return
+    }
+    weakBanner.value = await adaptiveApi.getWeakTopics(course.value.id)
+  } catch {
+    weakBanner.value = null
+  }
+}
+
+function goToWeakLesson(item) {
+  if (!item?.lesson_id || !course.value) return
+  const lesson = course.value.lessons?.find((l) => l.id === item.lesson_id)
+  if (lesson) {
+    selectLesson(lesson)
+    router.replace({ path: route.path, query: { ...route.query, lesson: item.lesson_id } })
+  }
 }
 
 function selectLesson(lesson) { currentLesson.value = lesson }
@@ -137,6 +164,18 @@ function renderContent(text) {
         </div>
       </div>
     </header>
+
+    <div v-if="weakBanner?.items?.length" class="weak-topics-banner">
+      <p class="weak-msg">{{ weakBanner.message }}</p>
+      <ul class="weak-list">
+        <li v-for="(w, wi) in weakBanner.items" :key="wi">
+          <span>{{ w.topic }} — ошибок: {{ w.wrong_count }}</span>
+          <button v-if="w.lesson_id" type="button" class="weak-btn" @click="goToWeakLesson(w)">
+            Открыть урок
+          </button>
+        </li>
+      </ul>
+    </div>
 
     <div class="course-container">
       <!-- SIDEBAR -->
@@ -244,6 +283,44 @@ function renderContent(text) {
   background: rgba(15, 23, 42, 0.95);
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
   z-index: 100;
+}
+
+.weak-topics-banner {
+  margin: 12px 24px 0;
+  padding: 14px 18px;
+  background: rgba(99, 102, 241, 0.12);
+  border: 1px solid rgba(129, 140, 248, 0.35);
+  border-radius: 10px;
+}
+.weak-msg {
+  margin: 0 0 10px;
+  color: #c7d2fe;
+  font-size: 14px;
+}
+.weak-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.weak-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 0;
+  font-size: 14px;
+}
+.weak-btn {
+  background: #4f46e5;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.weak-btn:hover {
+  background: #6366f1;
 }
 
 .header-left {

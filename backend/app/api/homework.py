@@ -1,4 +1,5 @@
 import json
+import time
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import or_
@@ -25,6 +26,8 @@ from app.services.homework_hint_service import generate_homework_hint
 from app.services.homework_journal_service import build_journal_summary, build_reminders
 from app.services.homework_review_service import review_assignment
 from app.services.homework_template_service import parse_content
+from app.services.weak_topics_service import record_quiz_weak_topics
+from app.services.metrics_service import record_metric
 
 router = APIRouter()
 
@@ -33,7 +36,13 @@ def _sanitize_content_for_student(content: HomeworkTemplateContent) -> HomeworkT
     return content.model_copy(
         update={
             "quiz_items": [
-                QuizItem(question=q.question, options=q.options, correct_index=None)
+                QuizItem(
+                    question=q.question,
+                    options=q.options,
+                    correct_index=None,
+                    topic="",
+                    lesson_id=None,
+                )
                 for q in content.quiz_items
             ]
         }
@@ -205,6 +214,14 @@ def submit_homework(
     assignment.student_quiz_json = _validate_and_dump_quiz(assignment.homework, submission)
     assignment.status = HomeworkStatus.submitted.value
 
+    record_quiz_weak_topics(
+        db,
+        student_id=current_user.id,
+        course_id=assignment.homework.course_id,
+        content_json=assignment.homework.content_json,
+        student_quiz_json=assignment.student_quiz_json,
+    )
+
     db.commit()
     db.refresh(assignment)
     assignment.student_name = assignment.student.username
@@ -229,6 +246,7 @@ def homework_hint(
     if assignment.status != HomeworkStatus.pending.value:
         raise HTTPException(status_code=400, detail="Подсказки доступны только до сдачи работы")
 
+    t0 = time.perf_counter()
     try:
         hint = generate_homework_hint(
             assignment.homework,
@@ -237,7 +255,24 @@ def homework_hint(
             draft_text=body.student_text if body else None,
             draft_quiz=body.student_quiz if body else None,
         )
+        record_metric(
+            db,
+            event_type="homework_hint",
+            user_id=current_user.id,
+            course_id=assignment.homework.course_id,
+            duration_ms=(time.perf_counter() - t0) * 1000,
+            success=True,
+        )
     except Exception as e:
+        record_metric(
+            db,
+            event_type="homework_hint",
+            user_id=current_user.id,
+            course_id=assignment.homework.course_id,
+            duration_ms=(time.perf_counter() - t0) * 1000,
+            success=False,
+            meta={"error": str(e)[:200]},
+        )
         raise HTTPException(
             status_code=503,
             detail=f"ИИ недоступен: {e}. Убедитесь, что Ollama запущена.",
@@ -289,9 +324,27 @@ def ai_review_homework(
     if assignment.status not in (HomeworkStatus.submitted.value, HomeworkStatus.graded.value):
         raise HTTPException(status_code=400, detail="Nothing submitted yet")
 
+    t0 = time.perf_counter()
     try:
         result = review_assignment(assignment.homework, assignment)
+        record_metric(
+            db,
+            event_type="ai_homework_review",
+            user_id=current_user.id,
+            course_id=assignment.homework.course_id,
+            duration_ms=(time.perf_counter() - t0) * 1000,
+            success=True,
+        )
     except Exception as e:
+        record_metric(
+            db,
+            event_type="ai_homework_review",
+            user_id=current_user.id,
+            course_id=assignment.homework.course_id,
+            duration_ms=(time.perf_counter() - t0) * 1000,
+            success=False,
+            meta={"error": str(e)[:200]},
+        )
         raise HTTPException(
             status_code=503,
             detail=f"ИИ недоступен: {e}. Убедитесь, что Ollama запущена.",
