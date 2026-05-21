@@ -6,6 +6,8 @@ STATIC_ROUTES = [
     ("/journal", "Журнал успеваемости"),
     ("/profile", "Профиль"),
     ("/homeworks", "Домашние задания"),
+    ("/analytics", "Аналитика и дашборд"),
+    ("/homeworks/workshop", "Конструктор домашних заданий (Мастерская)"),
 ]
 
 _FALLBACK_COURSES = [
@@ -19,15 +21,16 @@ _FALLBACK_COURSES = [
 def _static_routes_for_role(role: str | None) -> List[tuple[str, str]]:
     routes = list(STATIC_ROUTES)
     if role == "student":
-        routes = [(p, t) for p, t in routes if p != "/journal"]
+        routes = [(p, t) for p, t in routes if p not in ("/journal", "/analytics", "/homeworks/workshop")]
     return routes
 
 
 def build_navigation_prompt(
-    available_courses: List[Dict[str, Any]],
+    available_courses: List[Dict[str, Any]] | None = None,
     *,
     voice: bool = False,
     role: str | None = None,
+    ask_before_navigate: bool = False,
 ) -> str:
     courses = available_courses or _FALLBACK_COURSES
     lines: List[str] = []
@@ -41,16 +44,20 @@ def build_navigation_prompt(
             "Сначала одной фразой по-русски («Открываю журнал»), затем navigatePage. После вызова не повторяй переход.",
             "В приветствии и без просьбы пользователя — navigatePage не вызывай.",
             "",
-            "Переход на КУРС — два шага:",
-            "  Шаг 1: назови полное название курса и спроси подтверждение (без navigatePage).",
-            "  Шаг 2 (после «да», «давай», «ок»): navigatePage(path=\"/courses/{course_id}\") "
-            "и коротко «Открываю курс …».",
+        ])
+        if ask_before_navigate:
+            lines.extend([
+                "ПРАВИЛО ПЕРЕХОДА: Перед любым переходом (на курс, урок, профиль, журнал, ДЗ, оповещения) ты ОБЯЗАН спросить подтверждение.",
+                "Шаг 1: Спроси «Перейти на страницу ...?» (без navigatePage).",
+                "Шаг 2: ТОЛЬКО после ответа «да/давай/ок» вызывай navigatePage.",
+            ])
+        else:
+            lines.extend([
+                "ПРАВИЛО ПЕРЕХОДА: Переходи на нужную страницу без дополнительных вопросов, сразу вызывая инструмент navigatePage.",
+            ])
+        lines.extend([
             "",
-            "Переход на УРОК: navigatePage(path=\"/courses/{course_id}?lesson={lesson_id}\").",
-            "Сначала курс, затем урок. Назови полное название урока из списка.",
-            "",
-            "Журнал / Профиль / Главная / Домашние задания — navigatePage сразу при явной просьбе.",
-            "Используй ТОЛЬКО пути из списка ниже.",
+            "Используй ТОЛЬКО пути из списка ниже или ссылки из оповещений.",
         ])
     lines.append("")
     route_fmt = "navigatePage(path=\"{path}\")" if voice else "[NAVIGATE:{path}]"

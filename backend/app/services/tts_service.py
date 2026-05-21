@@ -12,10 +12,21 @@ _TTS_CACHE_MAX = 64
 def strip_emojis(text: str) -> str:
     """Удаляет эмодзи из текста, чтобы TTS их не озвучивал, сохраняя пунктуацию."""
     # Оставляем буквы, цифры, пробелы и основные знаки препинания
-    return re.sub(r'[^\w\s.,!?;:()\-«»\"\'\n]', '', text)
+    return re.sub(r'[^\w\s.,!?;:()\[\]{}\-«»"\'\n]', '', text)
 
 def clean_text_for_tts(text: str) -> str:
     """Очищает текст от markdown разметки и спецсимволов перед озвучкой."""
+    from num2words import num2words
+    
+    # Заменяем популярные символы на слова
+    text = text.replace("[]", " пустой массив ")
+    text = text.replace("{}", " пустой объект ")
+    text = text.replace("()", " пустые круглые скобки ")
+    text = text.replace("[", " левая квадратная скобка ")
+    text = text.replace("]", " правая квадратная скобка ")
+    text = text.replace("{", " левая фигурная скобка ")
+    text = text.replace("}", " правая фигурная скобка ")
+
     # Удаляем жирность и курсив (**text**, *text*, __text__, _text_)
     text = re.sub(r'[*_]{1,2}(.*?)[*_]{1,2}', r'\1', text)
     # Удаляем заголовки (# Заголовок)
@@ -28,6 +39,18 @@ def clean_text_for_tts(text: str) -> str:
     text = re.sub(r'`(.*?)`', r'\1', text)
     # Заменяем тире (одиночное или двойное) на пробелы, если оно висит отдельно
     text = re.sub(r'\s+[-—–]+\s+', ' ', text)
+    
+    # Чтение чисел словами (до 999 999 999, чтобы не сломать даты и годы - их лучше читать как есть или осторожно)
+    # Для простоты: все цифры, стоящие отдельно, переводим в слова
+    def replace_num(match):
+        num_str = match.group(0)
+        try:
+            return " " + num2words(int(num_str), lang='ru') + " "
+        except Exception:
+            return num_str
+
+    text = re.sub(r'\b\d+\b', replace_num, text)
+
     # Очищаем лишние пробелы
     text = re.sub(r'\s+', ' ', text).strip()
     return text
@@ -266,7 +289,7 @@ async def _synthesize_f5(text: str) -> bytes | None:
         try:
             import static_ffmpeg
             static_ffmpeg.add_paths()
-        except:
+        except Exception:
             pass
 
         if _f5_model is None:

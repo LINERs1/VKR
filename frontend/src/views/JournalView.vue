@@ -155,9 +155,13 @@ function isClickable(a) {
       </div>
 
       <div v-if="!students.length || !homeworks.length" class="empty-state">
-        <div class="empty-icon">📊</div>
-        <h2>Нет данных</h2>
-        <p>Назначьте домашние задания ученикам — они появятся в журнале.</p>
+        <svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--text-muted); margin-bottom: 16px;">
+          <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+          <line x1="3" y1="9" x2="21" y2="9"></line>
+          <line x1="9" y1="21" x2="9" y2="9"></line>
+        </svg>
+        <h2 style="margin: 0 0 8px; font-size: 18px; font-weight: 600;">Журнал пуст</h2>
+        <p style="margin: 0; font-size: 14px; color: var(--text-secondary);">Назначьте домашние задания ученикам — они появятся в журнале.</p>
       </div>
 
       <div v-else class="journal-container">
@@ -288,11 +292,7 @@ h1 {
   }
 }
 
-.empty-icon {
-  font-size: 40px;
-  margin-bottom: 12px;
-  opacity: 0.6;
-}
+
 
 .stats-row {
   display: flex;

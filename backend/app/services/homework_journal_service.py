@@ -48,7 +48,7 @@ def build_journal_summary(db: Session, teacher_id: int) -> dict:
                     {
                         "homework_id": hw.id,
                         "assignment_id": a.id,
-                        "homework_title": hw.title,
+                        "title": hw.title,
                         "course_id": hw.course_id,
                         "course_title": ctitle,
                         "student_id": sid,
@@ -61,7 +61,7 @@ def build_journal_summary(db: Session, teacher_id: int) -> dict:
                 not_submitted.append(
                     {
                         "homework_id": hw.id,
-                        "homework_title": hw.title,
+                        "title": hw.title,
                         "course_id": hw.course_id,
                         "course_title": ctitle,
                         "student_id": sid,

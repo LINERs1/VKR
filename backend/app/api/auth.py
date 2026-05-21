@@ -3,7 +3,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.user import User
-from app.schemas.user import UserCreate, UserResponse, Token
+from app.schemas.user import UserCreate, UserResponse, Token, UpdateProfile, ChangePassword, UpdateSettings
 from app.services.auth_service import (
     get_password_hash,
     verify_password,
@@ -52,6 +52,56 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
 
 @router.get("/me", response_model=UserResponse)
 def read_users_me(current_user: User = Depends(get_current_user)):
+    return current_user
+
+@router.put("/me", response_model=UserResponse)
+def update_profile(
+    body: UpdateProfile,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Обновить имя и email пользователя."""
+    if body.full_name is not None:
+        current_user.full_name = body.full_name.strip() or None
+    if body.email is not None:
+        email = body.email.strip()
+        if email and "@" not in email:
+            raise HTTPException(status_code=422, detail="Некорректный email")
+        # Проверяем уникальность
+        if email:
+            existing = db.query(User).filter(User.email == email, User.id != current_user.id).first()
+            if existing:
+                raise HTTPException(status_code=400, detail="Этот email уже используется")
+        current_user.email = email or None
+    db.commit()
+    db.refresh(current_user)
+    return current_user
+
+@router.put("/me/password")
+def change_password(
+    body: ChangePassword,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Смена пароля — требует текущий пароль."""
+    if not verify_password(body.current_password, current_user.password_hash):
+        raise HTTPException(status_code=400, detail="Текущий пароль неверен")
+    if len(body.new_password) < 6:
+        raise HTTPException(status_code=422, detail="Новый пароль должен быть минимум 6 символов")
+    current_user.password_hash = get_password_hash(body.new_password)
+    db.commit()
+    return {"ok": True, "message": "Пароль успешно изменён"}
+
+@router.put("/me/settings", response_model=UserResponse)
+def update_settings(
+    body: UpdateSettings,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Обновить настройки (JSON)."""
+    current_user.settings_json = body.settings_json
+    db.commit()
+    db.refresh(current_user)
     return current_user
 
 @router.get("/students", response_model=list[UserResponse])

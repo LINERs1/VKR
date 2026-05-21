@@ -195,8 +195,21 @@ def _build_system_prompt(
         )
     page_info = "\n".join(page_info_lines)
 
+    import json
+    user_settings = {}
+    if user.settings_json:
+        try:
+            user_settings = json.loads(user.settings_json)
+        except Exception:
+            pass
+    ask_nav = bool(user_settings.get("ai_ask_before_navigate"))
+    verbosity_short = bool(user_settings.get("ai_verbosity_short"))
+    proactive = bool(user_settings.get("ai_proactive"))
+
     role_caps = build_role_capabilities_prompt(role_en, voice=True)
-    nav_instructions = build_navigation_prompt(available_courses, voice=True, role=role_en)
+    nav_instructions = build_navigation_prompt(
+        available_courses, voice=True, role=role_en, ask_before_navigate=ask_nav
+    )
 
     hw_rules = ""
     extra_tools = ""
@@ -244,6 +257,25 @@ def _build_system_prompt(
 
     assistant = settings.ASSISTANT_NAME
 
+    behavior_rules = ["1. Только русский язык."]
+    if verbosity_short:
+        behavior_rules.append("2. Отвечай МАКСИМАЛЬНО кратко и по-человечески, не более 1-2 предложений. Без таблиц, кода и markdown — ты говоришь вслух.")
+    else:
+        behavior_rules.append("2. Отвечай кратко и по-человечески. Без таблиц, кода и markdown — ты говоришь вслух.")
+
+    if proactive:
+        behavior_rules.append("3. Ты можешь сам проявлять инициативу. Если видишь на экране новые данные (например, несданную работу или оповещение) — прокомментируй их или предложи свою помощь первым.")
+    else:
+        behavior_rules.append("3. Не комментируй экран по своей инициативе, отвечай только на прямые вопросы пользователя.")
+
+    behavior_rules.append("4. На приветствие отвечай тепло и коротко, без навигации.")
+    behavior_rules.append(f"5. {hw_rules}")
+    behavior_rules.append("6. Для поиска по материалам курса используй инструмент queryKnowledgeBase.")
+    if extra_tools:
+        behavior_rules.append(f"7. {extra_tools}")
+
+    behavior_rules_str = "\n".join(behavior_rules)
+
     prompt = f"""### ЯЗЫК
 ОТВЕЧАЙ ИСКЛЮЧИТЕЛЬНО НА РУССКОМ ЯЗЫКЕ. Ни слова на других языках.
 
@@ -253,12 +285,7 @@ def _build_system_prompt(
 Контекст: {req.course_name}.
 
 ### КАК СЕБЯ ВЕСТИ
-1. Только русский язык.
-2. Отвечай кратко и по-человечески. Без таблиц, кода и markdown — ты говоришь вслух.
-3. На приветствие отвечай тепло и коротко, без навигации.
-4. {hw_rules}
-5. Для поиска по материалам курса используй инструмент queryKnowledgeBase.
-{f'6. {extra_tools}' if extra_tools else ''}
+{behavior_rules_str}
 
 {role_caps}
 
@@ -409,6 +436,16 @@ async def create_ultravox_call(
         })
         selected_tools.append({
             "temporaryTool": {
+                "modelToolName": "reviewAllHomeworks",
+                "description": (
+                    "Запускает массовую фоновую ИИ-проверку всех несданных домашних заданий, которые ещё не проверялись ИИ. "
+                    "Вызывай, если преподаватель просит «проверь все ДЗ», «запусти проверку всех заданий»."
+                ),
+                "client": {},
+            }
+        })
+        selected_tools.append({
+            "temporaryTool": {
                 "modelToolName": "getTeacherSummary",
                 "description": (
                     "Сводка журнала: средний балл, кто не сдал ДЗ, что ждёт проверки, успеваемость по курсам. "
@@ -428,6 +465,7 @@ async def create_ultravox_call(
                 "client": {},
             }
         })
+
         selected_tools.append({
             "temporaryTool": {
                 "modelToolName": "getHomeworkHint",
@@ -438,6 +476,25 @@ async def create_ultravox_call(
                 "client": {},
             }
         })
+
+    # Общие инструменты для всех пользователей
+    selected_tools.append({
+        "temporaryTool": {
+            "modelToolName": "getNotifications",
+            "description": (
+                "Получает список новых оповещений (уведомлений) пользователя. "
+                "Оповещения содержат ссылки (links), по которым можно перейти с помощью navigatePage."
+            ),
+            "client": {},
+        }
+    })
+    selected_tools.append({
+        "temporaryTool": {
+            "modelToolName": "clearNotifications",
+            "description": "Очищает (удаляет) все оповещения пользователя.",
+            "client": {},
+        }
+    })
 
     voice_id = req.voice_id or settings.ULTRAVOX_VOICE_ID or None
     voice_overrides = _build_voice_overrides(voice_id) if voice_id else None

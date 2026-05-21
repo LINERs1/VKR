@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import chat, documents, widget, courses, stt, auth, homework, homework_templates, ultravox, adaptive, analytics
+from app.api import chat, documents, widget, courses, stt, auth, homework, homework_templates, ultravox, adaptive, analytics, notifications
 from app.config import settings
 from app.database import Base, engine, SessionLocal
 import app.models.homework  # noqa: F401
@@ -14,6 +14,7 @@ import app.models.chat_message  # noqa: F401
 import app.models.assistant_metric  # noqa: F401
 import app.models.user
 import app.models.course
+import app.models.notification  # noqa: F401
 from sqlalchemy import text
 
 # Initialize database
@@ -26,6 +27,8 @@ def _migrate_sqlite_columns():
         "ALTER TABLE homeworks ADD COLUMN content_json TEXT",
         "ALTER TABLE homeworks ADD COLUMN is_demo INTEGER DEFAULT 0",
         "ALTER TABLE homework_assignments ADD COLUMN student_quiz_json TEXT",
+        "ALTER TABLE homework_assignments ADD COLUMN ai_review_json TEXT",
+        "ALTER TABLE users ADD COLUMN settings_json TEXT",
     ]
     with engine.connect() as conn:
         for stmt in stmts:
@@ -113,6 +116,7 @@ app.include_router(homework.router, prefix="/api/homework", tags=["homework"])
 app.include_router(ultravox.router,  prefix="/api/ultravox", tags=["ultravox"])
 app.include_router(adaptive.router, prefix="/api/adaptive", tags=["adaptive"])
 app.include_router(analytics.router, prefix="/api/analytics", tags=["analytics"])
+app.include_router(notifications.router, prefix="/api/notifications", tags=["notifications"])
 
 
 @app.get("/api/health")

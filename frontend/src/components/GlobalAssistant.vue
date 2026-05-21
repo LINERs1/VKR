@@ -3,7 +3,8 @@ import { ref, nextTick, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { UltravoxSession, AgentReaction } from 'ultravox-client'
 import { useAuth } from '../composables/useAuth'
-import { hwApi, chatApi, analyticsApi } from '../api'
+import { hwApi, chatApi, analyticsApi, notificationsApi } from '../api'
+import { checkingAssignments } from '../composables/useNotifications.js'
 
 const route = useRoute()
 const router = useRouter()
@@ -361,7 +362,7 @@ function isRecentVoiceNav() {
   return Date.now() - voiceNavHandledAt < 3500
 }
 
-const STATIC_NAV_PATHS = ['/', '/profile', '/journal', '/homeworks']
+const STATIC_NAV_PATHS = ['/', '/profile', '/journal', '/homeworks', '/analytics', '/homeworks/workshop']
 const VOICE_YES_RE = /\b(да|давай|ок|окей|конечно|переводи|открывай|хорошо|ага|угу)\b/ui
 const HIDDEN_VOICE_CTX_RE = /^\[СИСТЕМА:\s*обновление контекста/i
 
@@ -471,7 +472,7 @@ function extractNavPathFromText(raw) {
 
   const patterns = [
     /\bNAVIGATE\s*:?\s*(\/[^\s\],.]*)/i,
-    /\bnavigate\s+(?:to\s+)?(\/(?:courses\/[^\s\],.]+|profile|journal|homeworks)?)/i,
+    /\bnavigate\s+(?:to\s+)?(\/(?:courses\/[^\s\],.]+|profile|journal|homeworks|analytics|homeworks\/workshop)?)/i,
     /\bnavigate\s+(?:to\s+)?courses\/([a-z0-9_-]+)/i,
   ]
   for (const re of patterns) {
@@ -497,7 +498,15 @@ function detectStaticNavInText(text) {
     if (user.value?.role === 'student') return null
     return '/journal'
   }
-  if (/домашн/i.test(lower)) return '/homeworks'
+  if (/аналитик|статистик|дашборд/i.test(lower)) {
+    if (user.value?.role === 'student') return null
+    return '/analytics'
+  }
+  if (/мастерск|конструктор/i.test(lower)) {
+    if (user.value?.role === 'student') return null
+    return '/homeworks/workshop'
+  }
+  if (/домашн|задани/i.test(lower)) return '/homeworks'
   return null
 }
 
@@ -567,6 +576,9 @@ function resolveNavigatePath(rawPath) {
   if (!path) return null
 
   if (STATIC_NAV_PATHS.includes(path)) return path
+  
+  if (path.startsWith('/homeworks/')) return path
+  if (path.startsWith('/journal/')) return path
 
   const m = path.match(/^\/courses\/(.+)$/i)
   if (!m) return null
@@ -749,6 +761,8 @@ async function runVoiceHomeworkReview() {
   voiceState.value = 'THINKING'
 
   void (async () => {
+    // Block the button in HomeworkDetailView by adding to the global set
+    checkingAssignments.add(assignmentId)
     try {
       const result = await hwApi.aiReviewHomework(assignmentId)
       window.dispatchEvent(
@@ -783,6 +797,9 @@ async function runVoiceHomeworkReview() {
           )
         } catch (_) {}
       }
+    } finally {
+      // Always unblock the button
+      checkingAssignments.delete(assignmentId)
     }
   })()
 
@@ -792,6 +809,29 @@ async function runVoiceHomeworkReview() {
     'Категорически не говори, что приложение или система зависли, пропала связь или произошёл сбой — это нормальное ожидание тяжёлого запроса. ' +
     'Когда проверка закончится, ты получишь отдельное служебное сообщение с результатом для озвучки.'
   )
+}
+
+async function runVoiceMassHomeworkReview() {
+  const u = user.value || (await fetchUser())
+  if (u?.role !== 'teacher') {
+    return 'Массовая проверка домашних заданий доступна только преподавателю.'
+  }
+  
+  voiceState.value = 'THINKING'
+  
+  try {
+    const res = await hwApi.aiReviewAllHomeworks()
+    if (!res || res.started === 0) {
+      return 'Все сданные учениками работы уже проверены или нет новых работ для проверки.'
+    }
+    return (
+      `Запущена массовая фоновая проверка для ${res.started} заданий. ` +
+      'Скажи пользователю по-русски одной фразой: запущена автоматическая проверка всех несданных заданий, она пройдет в фоне, результаты придут в уведомлениях.'
+    )
+  } catch (e) {
+    const msg = e?.message || String(e)
+    return `Сбой при массовой проверке. Скажи пользователю коротко: произошла ошибка при запуске массовой проверки (${msg}).`
+  }
 }
 
 async function runTeacherSummary() {
@@ -973,11 +1013,20 @@ function clearVoiceIdleTimer() {
 function resetVoiceIdleTimer() {
   clearVoiceIdleTimer()
   if (!voiceMode.value || voiceState.value !== 'LISTENING') return
+  
+  let autoDisconnect = false
+  if (user.value && user.value.settings_json) {
+    try {
+      autoDisconnect = !!JSON.parse(user.value.settings_json).ai_auto_disconnect
+    } catch (e) {}
+  }
+  if (!autoDisconnect) return
+  
   voiceIdleTimer = setTimeout(() => {
     if (!voiceMode.value || voiceState.value !== 'LISTENING') return
     voiceError.value = 'Звонок завершён из‑за тишины. Нажмите 🎤, чтобы снова поговорить с Кортаной.'
     stopVoiceMode({ preserveError: true })
-  }, VOICE_IDLE_MS)
+  }, 120_000) // 2 minutes
 }
 
 function scheduleVoicePageContextPush(delay = 450, force = false) {
@@ -1049,9 +1098,39 @@ async function startUltravoxSession() {
     uvSession.registerToolImplementation('navigatePage', (params) => runVoiceNavigate(params))
     uvSession.registerToolImplementation('queryKnowledgeBase', (params) => runVoiceRagQuery(params))
     uvSession.registerToolImplementation('reviewHomework', () => runVoiceHomeworkReview())
+    uvSession.registerToolImplementation('reviewAllHomeworks', () => runVoiceMassHomeworkReview())
     uvSession.registerToolImplementation('getTeacherSummary', () => runTeacherSummary())
     uvSession.registerToolImplementation('getHomeworkReminders', () => runVoiceReminders())
     uvSession.registerToolImplementation('getHomeworkHint', () => runVoiceHomeworkHint())
+    uvSession.registerToolImplementation('getPageContext', async () => {
+      await refreshPageContextFromRoute()
+      return buildVoiceContextMessage()
+    })
+    uvSession.registerToolImplementation('navigatePage', (params) => runVoiceNavigate(params))
+    uvSession.registerToolImplementation('queryKnowledgeBase', (params) => runVoiceRagQuery(params))
+    uvSession.registerToolImplementation('reviewHomework', () => runVoiceHomeworkReview())
+    uvSession.registerToolImplementation('reviewAllHomeworks', () => runVoiceMassHomeworkReview())
+    uvSession.registerToolImplementation('getTeacherSummary', () => runTeacherSummary())
+    uvSession.registerToolImplementation('getHomeworkReminders', () => runVoiceReminders())
+    uvSession.registerToolImplementation('getHomeworkHint', () => runVoiceHomeworkHint())
+    uvSession.registerToolImplementation('getNotifications', async () => {
+      try {
+        const notifs = await notificationsApi.get()
+        if (!notifs || notifs.length === 0) return 'У пользователя нет непрочитанных оповещений.'
+        const list = notifs.map(n => `- [ID: ${n.id}] ${n.title}: ${n.message} (Ссылка для перехода: ${n.link})`).join('\n')
+        return `Непрочитанные оповещения:\n${list}`
+      } catch(e) {
+        return 'Не удалось загрузить оповещения.'
+      }
+    })
+    uvSession.registerToolImplementation('clearNotifications', async () => {
+      try {
+        await notificationsApi.clear()
+        return 'Все оповещения успешно очищены.'
+      } catch(e) {
+        return 'Не удалось очистить оповещения.'
+      }
+    })
     await uvSession.joinCall(joinUrl)
     burstApplyVoiceVolume()
 
@@ -1541,6 +1620,7 @@ onMounted(() => {
   fetchUser().then(() => loadHomeworkReminders())
   window.addEventListener('beforeunload', forceCleanup)
   window.addEventListener('eduai-lesson-changed', onLessonChanged)
+  window.addEventListener('eduai-new-notification', onNewNotification)
 })
 
 onUnmounted(() => {
@@ -1552,7 +1632,26 @@ onUnmounted(() => {
   forceCleanup()
   window.removeEventListener('beforeunload', forceCleanup)
   window.removeEventListener('eduai-lesson-changed', onLessonChanged)
+  window.removeEventListener('eduai-new-notification', onNewNotification)
 })
+
+function onNewNotification(e) {
+  const notif = e.detail
+  if (!notif) return
+  
+  let autoRead = false
+  if (user.value && user.value.settings_json) {
+    try {
+      autoRead = !!JSON.parse(user.value.settings_json).ai_auto_read_notifs
+    } catch(err) {}
+  }
+  
+  if (autoRead && voiceMode.value && uvSession && (voiceState.value === 'LISTENING' || voiceState.value === 'SPEAKING' || voiceState.value === 'THINKING')) {
+    try {
+      uvSession.sendText(`[СИСТЕМА: Пришло новое оповещение: "${notif.title} - ${notif.message}". Озвучь его пользователю кратко.]`, true)
+    } catch(err) {}
+  }
+}
 
 // ─── Voice Mode (Ultravox) ─────────────────────────────────────────────────
 async function startVoiceMode() {
@@ -2154,8 +2253,16 @@ function onOrbPointerUp(e) {
   <div>
     <!-- Chat FAB -->
     <button class="chat-fab" @click="togglePanel" :title="isOpen ? 'Закрыть чат' : 'Открыть чат EduAI'">
-      {{ isOpen ? '✕' : '💬' }}
-            </button>
+      <svg v-if="isOpen" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <line x1="18" y1="6" x2="6" y2="18"/>
+        <line x1="6" y1="6" x2="18" y2="18"/>
+      </svg>
+      <svg v-else width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
+        <path d="M12 8v4" />
+        <path d="M12 16h.01" />
+      </svg>
+    </button>
 
     <!-- Panels anchor (text chat) in bottom right -->
     <div class="panels-anchor" ref="panelsAnchorRef" :class="{'panels-open': isOpen}">
@@ -2163,12 +2270,18 @@ function onOrbPointerUp(e) {
         <div v-if="isOpen && !voiceMode" class="widget-panel">
           <div class="wp-header">
             <div class="wp-header-left">
-              <span class="wp-icon">🤖</span>
+              <span class="wp-icon">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                  <path d="M12 2L2 7l10 5 10-5-10-5z" fill="currentColor" opacity="0.8"/>
+                  <path d="M2 17l10 5 10-5" />
+                  <path d="M2 12l10 5 10-5" />
+                </svg>
+              </span>
               <div>
                 <div class="wp-title">EduAI</div>
                 <div class="wp-status">Online</div>
-          </div>
-          </div>
+              </div>
+            </div>
             <button class="icon-btn" @click="togglePanel">✕</button>
           </div>
           <div v-if="homeworkReminder && !history.length" class="wp-reminder">
@@ -2177,12 +2290,14 @@ function onOrbPointerUp(e) {
           </div>
           <!-- Messages -->
           <div class="wp-thread" ref="threadEl">
+            <!-- Greeting -->
             <div class="msg-row bot-row">
               <div class="msg-bubble bot-bubble">
                 <div class="msg-md">Привет! Я твой персональный ИИ-ассистент <b>{{ courseName }}</b>.<br>Чем могу помочь сегодня?</div>
-        </div>
-        </div>
-            
+              </div>
+            </div>
+
+            <!-- History -->
             <div class="msg-row" v-for="(msg, i) in history" :key="i" :class="msg.role === 'user' ? 'user-row' : 'bot-row'">
               <div class="msg-bubble" :class="msg.role === 'user' ? 'user-bubble' : 'bot-bubble'">
                 <div class="msg-md" v-html="renderMarkdown(msg.content)"></div>
@@ -2191,21 +2306,23 @@ function onOrbPointerUp(e) {
                     <span class="src-icon">📄</span>
                     <span class="src-name">{{ typeof src === 'string' ? src : (src.title || src.file_name) }}</span>
                   </span>
-          </div>
+                </div>
                 <button v-if="msg.role === 'assistant'" class="icon-btn" @click="speakText(msg.content)" title="Озвучить">🔊</button>
-          </div>
-        </div>
+              </div>
+            </div>
 
+            <!-- Loading indicator -->
             <div class="msg-row bot-row" v-if="isLoading">
               <div class="msg-bubble bot-bubble">
                 <div class="typing-indicator"><span></span><span></span><span></span></div>
+              </div>
             </div>
-          </div>
 
+            <!-- Error message -->
             <div class="msg-row bot-row" v-if="errorText">
               <div class="msg-bubble error-bubble">
                 {{ errorText }}
-                </div>
+              </div>
             </div>
           </div>
 
@@ -2264,7 +2381,10 @@ function onOrbPointerUp(e) {
     >
       <div
         class="island-rgb-shell"
-        :class="{ active: voiceMode, expanded: islandExpanded }"
+        :class="[
+          { active: voiceMode, expanded: islandExpanded },
+          voiceMode ? voiceState.toLowerCase() : ''
+        ]"
       >
       <div class="island-stack" :class="{ expanded: islandExpanded }">
       <!-- Main Island -->
@@ -2359,7 +2479,7 @@ function onOrbPointerUp(e) {
 }
 .chat-fab:hover {
   transform: scale(1.08);
-  background: var(--accent-hover, #3b82f6);
+  background: var(--accent-hover);
 }
 .chat-fab:active {
   transform: scale(0.95);
@@ -2382,13 +2502,15 @@ function onOrbPointerUp(e) {
 .widget-panel {
   width: 380px;
   max-width: calc(100vw - 32px);
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 24px;
+  background: rgba(18, 18, 22, 0.85);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 20px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  box-shadow: 0 20px 40px rgba(0,0,0,0.3);
+  box-shadow: 0 24px 48px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.05) inset;
   height: 550px;
   max-height: calc(100vh - 120px);
 }
@@ -2407,6 +2529,30 @@ function onOrbPointerUp(e) {
   syntax: '<angle>';
   initial-value: 0deg;
   inherits: false;
+}
+
+/* ─── Suggestions ────────────────────────── */
+.wp-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 16px 12px;
+}
+.sug-btn {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 6px 12px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  transition: all 0.2s;
+  font-family: inherit;
+}
+.sug-btn:hover {
+  background: var(--accent-subtle);
+  border-color: rgba(99, 102, 241, 0.3);
+  color: #fff;
 }
 
 @keyframes islandRgbSpin {
@@ -2463,18 +2609,37 @@ function onOrbPointerUp(e) {
   border-radius: 999px;
   background: conic-gradient(
     from var(--island-rgb-angle),
-    #6366f1,
-    #22d3ee,
-    #c084fc,
-    #fb7185,
-    #fbbf24,
-    #6366f1
+    var(--glow-1, #6366f1),
+    var(--glow-2, #22d3ee),
+    var(--glow-3, #c084fc),
+    var(--glow-4, #fb7185),
+    var(--glow-5, #fbbf24),
+    var(--glow-1, #6366f1)
   );
   animation: islandRgbSpin 3.2s linear infinite;
   box-shadow:
     0 0 18px rgba(99, 102, 241, 0.45),
     0 0 36px rgba(34, 211, 238, 0.2),
     0 8px 28px rgba(0, 0, 0, 0.45);
+  transition: all 0.5s ease;
+}
+
+.island-rgb-shell.active.listening {
+  --glow-1: #3b82f6; --glow-2: #10b981; --glow-3: #0ea5e9; --glow-4: #3b82f6; --glow-5: #6366f1;
+  animation-duration: 2.5s;
+  box-shadow: 0 0 24px rgba(59, 130, 246, 0.5);
+}
+
+.island-rgb-shell.active.thinking {
+  --glow-1: #f59e0b; --glow-2: #f43f5e; --glow-3: #8b5cf6; --glow-4: #ec4899; --glow-5: #f59e0b;
+  animation-duration: 1.2s;
+  box-shadow: 0 0 32px rgba(244, 63, 94, 0.6);
+}
+
+.island-rgb-shell.active.speaking {
+  --glow-1: #10b981; --glow-2: #84cc16; --glow-3: #14b8a6; --glow-4: #22c55e; --glow-5: #10b981;
+  animation-duration: 1.5s;
+  box-shadow: 0 0 32px rgba(16, 185, 129, 0.6);
 }
 
 .island-rgb-shell.active.expanded {
@@ -2737,7 +2902,7 @@ function onOrbPointerUp(e) {
 .voice-dock-end:hover { background: rgba(239, 68, 68, 0.45); }
 
 /* ─── Chat Internal Styles ────────────────────────────────── */
-.wp-header { padding: 16px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.02); }
+.wp-header { padding: 18px 20px; border-bottom: 1px solid rgba(255,255,255,0.08); display: flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.02); }
 .wp-reminder {
   display: flex;
   align-items: flex-start;
@@ -2751,18 +2916,18 @@ function onOrbPointerUp(e) {
   border-bottom: 1px solid rgba(251, 191, 36, 0.2);
 }
 .wp-header-left { display: flex; align-items: center; gap: 12px; }
-.wp-icon { font-size: 24px; background: rgba(255,255,255,0.05); width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; border-radius: 12px; }
-.wp-title { font-weight: 600; font-size: 15px; }
-.wp-status { font-size: 12px; color: #10b981; display: flex; align-items: center; gap: 4px; }
+.wp-icon { color: #fff; background: linear-gradient(135deg, var(--accent) 0%, #818cf8 100%); width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; border-radius: 12px; box-shadow: 0 4px 12px rgba(99,102,241,0.3); }
+.wp-title { font-weight: 700; font-size: 16px; letter-spacing: -0.01em; }
+.wp-status { font-size: 12px; color: #10b981; display: flex; align-items: center; gap: 6px; margin-top: 2px; }
 .wp-status::before { content: ''; width: 6px; height: 6px; background: #10b981; border-radius: 50%; box-shadow: 0 0 8px rgba(16,185,129,0.5); }
 
-.wp-thread { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 16px; scroll-behavior: smooth; }
+.wp-thread { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 16px; scroll-behavior: smooth; }
 .msg-row { display: flex; width: 100%; }
 .user-row { justify-content: flex-end; }
 .bot-row { justify-content: flex-start; }
-.msg-bubble { max-width: 85%; padding: 12px 16px; border-radius: 18px; font-size: 14px; line-height: 1.5; position: relative; }
-.user-bubble { background: var(--accent); color: white; border-bottom-right-radius: 4px; }
-.bot-bubble { background: rgba(255,255,255,0.05); border: 1px solid var(--border); border-bottom-left-radius: 4px; }
+.msg-bubble { max-width: 85%; padding: 12px 16px; border-radius: 16px; font-size: 14px; line-height: 1.5; position: relative; }
+.user-bubble { background: linear-gradient(135deg, var(--accent) 0%, #5254cc 100%); color: white; border-bottom-right-radius: 4px; box-shadow: 0 4px 12px rgba(99,102,241,0.2); }
+.bot-bubble { background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.08); border-bottom-left-radius: 4px; color: #f0f0f5; }
 .error-bubble { background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3); color: #fca5a5; }
 .msg-md :deep(.hw-error) { color: #ef4444; font-weight: 700; }
 

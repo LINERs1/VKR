@@ -8,18 +8,27 @@
         В профиль
       </button>
       <h2>Домашние задания</h2>
-      <div v-if="isTeacher" class="header-actions">
-        <button class="workshop-btn" @click="$router.push('/homeworks/workshop')">
+      <div class="header-actions">
+        <NotificationsBell />
+        <button v-if="isTeacher" class="workshop-btn" @click="$router.push('/homeworks/workshop')">
           Мастерская
         </button>
-        <button class="create-btn" @click="showModal = true">+ Создать ДЗ</button>
+        <button v-if="isTeacher" class="create-btn" @click="showModal = true">+ Создать ДЗ</button>
       </div>
     </header>
 
     <main class="list-container">
       <div v-if="loading" class="loading">Загрузка...</div>
-      <div v-else-if="homeworks.length === 0" class="empty">
-        У вас пока нет домашних заданий.
+      <div v-else-if="homeworks.length === 0" class="empty-state">
+        <svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--text-muted); margin-bottom: 16px;">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+          <polyline points="14 2 14 8 20 8"></polyline>
+          <line x1="16" y1="13" x2="8" y2="13"></line>
+          <line x1="16" y1="17" x2="8" y2="17"></line>
+          <polyline points="10 9 9 9 8 9"></polyline>
+        </svg>
+        <div class="empty-title">Заданий пока нет</div>
+        <div class="empty-subtitle">Здесь будут отображаться домашние работы</div>
       </div>
       <div v-else class="hw-grid">
         <div 
@@ -92,6 +101,7 @@ import { ref, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuth } from '../composables/useAuth'
 import { hwApi } from '../api'
+import NotificationsBell from '../components/NotificationsBell.vue'
 
 const router = useRouter()
 const { fetchUser } = useAuth()
@@ -243,6 +253,28 @@ async function handleCreate() {
 .status-badge.graded { background: rgba(16, 185, 129, 0.15); color: #34d399; }
 
 .hw-title { margin: 0 0 8px; font-size: 18px; }
+.loading {
+  text-align: center; color: var(--text-secondary); margin-top: 40px;
+}
+.empty-state {
+  text-align: center;
+  padding: 64px 24px;
+  color: var(--text-muted);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.empty-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 8px;
+}
+.empty-subtitle {
+  font-size: 14px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
 .hw-desc { margin: 0; color: #a1a1aa; font-size: 14px; line-height: 1.5; }
 .hw-stats { margin-top: 16px; font-size: 13px; color: #818cf8; }
 

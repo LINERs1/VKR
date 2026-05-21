@@ -4,6 +4,7 @@ import { marked } from 'marked'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuth } from '../composables/useAuth'
 import { adaptiveApi } from '../api'
+import { getApiBaseUrl } from '../api'
 
 const route = useRoute()
 const router = useRouter()
@@ -141,6 +142,82 @@ function renderContent(text) {
   if (!text) return ''
   return marked.parse(text)
 }
+
+// ── AI Tools (Lesson Summary + Quiz Generator) ──────────────────────────────
+const aiPanel = ref(null) // null | 'summary' | 'quiz'
+const aiResult = ref('')
+const aiBusy = ref(false)
+const aiError = ref('')
+
+async function runAiTool(tool) {
+  if (!currentLesson.value || !course.value) return
+  aiPanel.value = tool
+  aiResult.value = ''
+  aiError.value = ''
+  aiBusy.value = true
+
+  const ctx = {
+    courseId: course.value.id,
+    lessonTitle: currentLesson.value.title,
+    lessonContent: currentLesson.value.content || '',
+  }
+
+  let prompt = ''
+  if (tool === 'summary') {
+    prompt = `Сделай краткое резюме (3-5 ключевых пунктов) урока "${ctx.lessonTitle}" из курса "${course.value.title}". Используй только материалы этого урока. Отвечай на русском языке. Формат: маркированный список.`
+  } else if (tool === 'quiz') {
+    prompt = `Составь 4 вопроса с вариантами ответов (A, B, C, D) по уроку "${ctx.lessonTitle}" из курса "${course.value.title}". Для каждого вопроса укажи правильный ответ. Отвечай на русском языке.`
+  }
+
+  try {
+    const token = localStorage.getItem('token')
+    const baseUrl = getApiBaseUrl()
+    const res = await fetch(`${baseUrl}/chat/stream`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({
+        message: prompt,
+        course_id: ctx.courseId,
+        lesson_id: currentLesson.value.id,
+        context: {},
+      }),
+    })
+
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buf = ''
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buf += decoder.decode(value, { stream: true })
+      const lines = buf.split('\n')
+      buf = lines.pop()
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue
+        try {
+          const parsed = JSON.parse(line.slice(6))
+          if (parsed.type === 'token' && parsed.content) {
+            aiResult.value += parsed.content
+          }
+        } catch {}
+      }
+    }
+  } catch (e) {
+    aiError.value = `Ошибка: ${e.message}`
+  } finally {
+    aiBusy.value = false
+  }
+}
+
+function closeAiPanel() {
+  aiPanel.value = null
+  aiResult.value = ''
+  aiError.value = ''
+}
 </script>
 
 <template>
@@ -239,6 +316,53 @@ function renderContent(text) {
             <div class="lesson-badges">
               <span class="badge">⏱ {{ currentLesson.duration }}</span>
               <span class="badge instructor">👤 {{ course.instructor }}</span>
+            </div>
+
+            <!-- AI Tools row -->
+            <div class="ai-tools-row">
+              <button
+                class="ai-tool-btn"
+                :class="{ active: aiPanel === 'summary' }"
+                @click="aiPanel === 'summary' ? closeAiPanel() : runAiTool('summary')"
+                :disabled="aiBusy"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                  <line x1="21" y1="10" x2="3" y2="10"/>
+                  <line x1="21" y1="6" x2="3" y2="6"/>
+                  <line x1="21" y1="14" x2="3" y2="14"/>
+                  <line x1="21" y1="18" x2="10" y2="18"/>
+                </svg>
+                Резюме урока
+              </button>
+              <button
+                class="ai-tool-btn"
+                :class="{ active: aiPanel === 'quiz' }"
+                @click="aiPanel === 'quiz' ? closeAiPanel() : runAiTool('quiz')"
+                :disabled="aiBusy"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                  <circle cx="12" cy="12" r="10"/>
+                  <path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/>
+                  <line x1="12" y1="17" x2="12.01" y2="17"/>
+                </svg>
+                Проверь знания
+              </button>
+            </div>
+
+            <!-- AI result panel -->
+            <div v-if="aiPanel" class="ai-result-panel">
+              <div class="arp-header">
+                <span class="arp-title">
+                  {{ aiPanel === 'summary' ? '✦ Резюме урока' : '✦ Вопросы по уроку' }}
+                </span>
+                <button class="arp-close" @click="closeAiPanel">✕</button>
+              </div>
+              <div v-if="aiBusy && !aiResult" class="arp-loading">
+                <div class="arp-dots"><span></span><span></span><span></span></div>
+                <span>{{ aiPanel === 'summary' ? 'Генерирую резюме...' : 'Составляю вопросы...' }}</span>
+              </div>
+              <div v-if="aiError" class="arp-error">{{ aiError }}</div>
+              <div v-if="aiResult" class="arp-content" v-html="renderContent(aiResult)"></div>
             </div>
           </div>
 
@@ -589,4 +713,119 @@ function renderContent(text) {
 }
 
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* ─── AI Tools ─────────────────────────────── */
+.ai-tools-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 20px;
+}
+
+.ai-tool-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 14px;
+  background: rgba(99, 102, 241, 0.08);
+  border: 1px solid rgba(99, 102, 241, 0.2);
+  border-radius: 8px;
+  color: #a5b4fc;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.ai-tool-btn:hover:not(:disabled) {
+  background: rgba(99, 102, 241, 0.15);
+  border-color: rgba(99, 102, 241, 0.4);
+  color: #c7d2fe;
+}
+.ai-tool-btn.active {
+  background: rgba(99, 102, 241, 0.18);
+  border-color: rgba(99, 102, 241, 0.5);
+  color: #e0e7ff;
+}
+.ai-tool-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.ai-result-panel {
+  margin-top: 20px;
+  background: rgba(99, 102, 241, 0.06);
+  border: 1px solid rgba(99, 102, 241, 0.18);
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.arp-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid rgba(99, 102, 241, 0.12);
+}
+
+.arp-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #a5b4fc;
+  letter-spacing: 0.01em;
+}
+
+.arp-close {
+  background: none;
+  border: none;
+  color: #64748b;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 6px;
+  border-radius: 5px;
+  transition: all 0.15s;
+}
+.arp-close:hover { color: #e2e8f0; background: rgba(255,255,255,0.06); }
+
+.arp-loading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px;
+  color: #64748b;
+  font-size: 14px;
+}
+
+.arp-dots {
+  display: flex;
+  gap: 4px;
+}
+.arp-dots span {
+  width: 6px; height: 6px;
+  background: #6366f1;
+  border-radius: 50%;
+  animation: dot-bounce 1.4s infinite;
+}
+.arp-dots span:nth-child(2) { animation-delay: 0.2s; }
+.arp-dots span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes dot-bounce {
+  0%, 80%, 100% { transform: scale(0.7); opacity: 0.4; }
+  40% { transform: scale(1.1); opacity: 1; }
+}
+
+.arp-error {
+  padding: 14px 16px;
+  color: #fca5a5;
+  font-size: 14px;
+}
+
+.arp-content {
+  padding: 16px;
+  font-size: 15px;
+  line-height: 1.7;
+  color: #cbd5e1;
+}
+
+.arp-content :deep(ul) { padding-left: 20px; margin: 0 0 12px; }
+.arp-content :deep(li) { margin-bottom: 6px; }
+.arp-content :deep(strong) { color: #e2e8f0; }
+.arp-content :deep(p) { margin: 0 0 10px; }
+.arp-content :deep(h3) { font-size: 15px; color: #e2e8f0; margin: 14px 0 8px; }
 </style>

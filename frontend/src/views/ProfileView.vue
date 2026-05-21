@@ -1,146 +1,127 @@
-<template>
-  <div class="profile-view" v-if="user">
-    <header class="header">
-      <button class="back-btn" @click="$router.push('/')">
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M19 12H5M12 19l-7-7 7-7" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-        На главную
-      </button>
-      <div class="user-info">
-        <div class="avatar">{{ user.username[0].toUpperCase() }}</div>
-        <div>
-          <h2 class="username">{{ user.username }}</h2>
-          <span class="role-badge">{{ user.role === 'teacher' ? 'Преподаватель' : 'Ученик' }}</span>
-        </div>
-      </div>
-      <button class="logout-btn" @click="handleLogout">Выйти</button>
-    </header>
-
-    <main class="content">
-      <div v-if="loading" class="loading">Загрузка профиля...</div>
-      <div v-else class="dashboard-grid">
-        
-        <!-- СТАТИСТИКА (ВИДЯТ ВСЕ) -->
-        <div class="panel stats-panel">
-          <h3>Аналитика успеваемости</h3>
-          <div class="stats-cards">
-            <div class="stat-box">
-              <div class="stat-num" :style="{ color: roleColor }">{{ stats.avgGrade }}</div>
-              <div class="stat-title">Средний балл</div>
-            </div>
-            <div class="stat-box" v-if="user.role === 'teacher'">
-              <div class="stat-num">{{ stats.totalAssigned }}</div>
-              <div class="stat-title">Выдано ДЗ</div>
-            </div>
-            <div class="stat-box" v-if="user.role === 'student'">
-              <div class="stat-num">{{ stats.totalCompleted }}</div>
-              <div class="stat-title">Сдано ДЗ</div>
-            </div>
-            <div class="stat-box">
-              <div class="stat-num" style="color: #f59e0b;">{{ stats.pendingAction }}</div>
-              <div class="stat-title">{{ user.role === 'teacher' ? 'Ждут проверки' : 'Ожидают выполнения' }}</div>
-            </div>
-          </div>
-        </div>
-
-        <!-- ГРАФИК УСПЕВАЕМОСТИ ПО КУРСАМ -->
-        <div class="panel chart-panel">
-          <h3>Успеваемость по курсам (Средний балл)</h3>
-          <div v-if="Object.keys(stats.courseAverages).length === 0" class="empty-chart">
-            Нет данных для построения графика
-          </div>
-          <div v-else class="css-bar-chart">
-            <div class="bar-wrapper" v-for="(avg, courseId) in stats.courseAverages" :key="courseId">
-              <div class="bar-track">
-                <div class="bar-fill" :style="{ height: (avg / 5 * 100) + '%', background: roleColor }">
-                  <span class="bar-value-tooltip">{{ avg }}</span>
-                </div>
-              </div>
-              <div class="bar-label">{{ courseId }}</div>
-            </div>
-          </div>
-        </div>
-
-        <!-- ИСТОРИЯ ПОСЛЕДНИХ ОЦЕНОК (Только для студента) -->
-        <div class="panel history-panel" v-if="user.role === 'student'">
-          <h3>Последние оценки</h3>
-          <div class="grades-list">
-            <div v-for="hw in recentGraded" :key="hw.id" class="grade-item">
-              <div class="grade-item-info">
-                <div class="gi-title">{{ hw.title }}</div>
-                <div class="gi-course">{{ hw.course_id }}</div>
-              </div>
-              <div class="gi-score">{{ hw.assignments[0].grade }}</div>
-            </div>
-            <div v-if="recentGraded.length === 0" class="empty-text">Пока нет оцененных заданий</div>
-          </div>
-        </div>
-      </div>
-      
-      <div style="text-align: center; margin-top: 30px;">
-        <button class="action-btn" @click="$router.push('/homeworks')">Перейти к Домашним заданиям</button>
-      </div>
-    </main>
-  </div>
-</template>
-
 <script setup>
-import { onMounted, ref, computed } from 'vue'
+import { onMounted, ref, computed, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuth } from '../composables/useAuth'
-import { hwApi } from '../api'
+import { hwApi, apiFetch } from '../api'
+import NotificationsBell from '../components/NotificationsBell.vue'
+import SettingsModal from '../components/SettingsModal.vue'
 
 const router = useRouter()
-const { fetchUser } = useAuth()
+const { fetchUser, logout } = useAuth()
+
 const user = ref(null)
 const homeworks = ref([])
 const loading = ref(true)
+const activeTab = ref('profile') // 'profile' | 'stats' | 'security'
+const showSettings = ref(false)
 
-const roleColor = computed(() => user.value?.role === 'teacher' ? '#f59e0b' : '#3b82f6')
+// ── Profile edit ─────────────────────────────────────────────
+const profileForm = reactive({ full_name: '', email: '' })
+const profileSaving = ref(false)
+const profileSuccess = ref('')
+const profileError = ref('')
 
+function initProfileForm() {
+  profileForm.full_name = user.value?.full_name || ''
+  profileForm.email = user.value?.email || ''
+}
+
+async function saveProfile() {
+  profileSaving.value = true
+  profileSuccess.value = ''
+  profileError.value = ''
+  try {
+    const updated = await apiFetch('/auth/me', {
+      method: 'PUT',
+      body: JSON.stringify({
+        full_name: profileForm.full_name || null,
+        email: profileForm.email || null,
+      }),
+    })
+    user.value = updated
+    profileSuccess.value = 'Профиль сохранён!'
+    setTimeout(() => profileSuccess.value = '', 3000)
+  } catch (e) {
+    profileError.value = e.message || 'Ошибка сохранения'
+  } finally {
+    profileSaving.value = false
+  }
+}
+
+// ── Password change ──────────────────────────────────────────
+const pwdForm = reactive({ current: '', newPwd: '', confirm: '' })
+const pwdSaving = ref(false)
+const pwdSuccess = ref('')
+const pwdError = ref('')
+const showPwd = reactive({ current: false, newPwd: false, confirm: false })
+
+async function changePassword() {
+  pwdError.value = ''
+  pwdSuccess.value = ''
+  if (pwdForm.newPwd !== pwdForm.confirm) {
+    pwdError.value = 'Новый пароль и подтверждение не совпадают'
+    return
+  }
+  if (pwdForm.newPwd.length < 6) {
+    pwdError.value = 'Пароль должен быть минимум 6 символов'
+    return
+  }
+  pwdSaving.value = true
+  try {
+    await apiFetch('/auth/me/password', {
+      method: 'PUT',
+      body: JSON.stringify({
+        current_password: pwdForm.current,
+        new_password: pwdForm.newPwd,
+      }),
+    })
+    pwdSuccess.value = 'Пароль успешно изменён!'
+    pwdForm.current = ''
+    pwdForm.newPwd = ''
+    pwdForm.confirm = ''
+    setTimeout(() => pwdSuccess.value = '', 4000)
+  } catch (e) {
+    pwdError.value = e.message || 'Ошибка смены пароля'
+  } finally {
+    pwdSaving.value = false
+  }
+}
+
+// ── Stats ────────────────────────────────────────────────────
 const stats = computed(() => {
-  if (!user.value) return { avgGrade: 0, pendingAction: 0, totalAssigned: 0, totalCompleted: 0, courseAverages: {} }
-  
-  let totalGrades = 0
-  let gradeCount = 0
-  let pending = 0
-  let completed = 0
-  let courseGrades = {} // { course_id: { sum: 0, count: 0 } }
-  
+  if (!user.value) return { avgGrade: '-', pendingAction: 0, totalCompleted: 0, totalAssigned: 0, courseAverages: {} }
+  let totalGrades = 0, gradeCount = 0, pending = 0, completed = 0
+  const courseGrades = {}
+
   homeworks.value.forEach(hw => {
-    const courseId = hw.course_id
-    if (!courseGrades[courseId]) courseGrades[courseId] = { sum: 0, count: 0 }
-    
+    const cid = hw.course_id
+    if (!courseGrades[cid]) courseGrades[cid] = { sum: 0, count: 0 }
     hw.assignments.forEach(a => {
-      // Для студента считаем только его ассайнменты
       if (user.value.role === 'student' && a.student_id !== user.value.id) return
-      
       if (a.status === 'graded' && a.grade) {
         totalGrades += a.grade
         gradeCount++
-        courseGrades[courseId].sum += a.grade
-        courseGrades[courseId].count++
+        courseGrades[cid].sum += a.grade
+        courseGrades[cid].count++
       }
       if (user.value.role === 'teacher' && a.status === 'submitted') pending++
       if (user.value.role === 'student' && a.status === 'pending') pending++
-      if (user.value.role === 'student' && (a.status === 'submitted' || a.status === 'graded')) completed++
+      if (user.value.role === 'student' && ['submitted', 'graded'].includes(a.status)) completed++
     })
   })
-  
+
   const courseAverages = {}
   for (const cid in courseGrades) {
-    if (courseGrades[cid].count > 0) {
+    if (courseGrades[cid].count > 0)
       courseAverages[cid] = (courseGrades[cid].sum / courseGrades[cid].count).toFixed(1)
-    }
   }
-  
+
   return {
     avgGrade: gradeCount > 0 ? (totalGrades / gradeCount).toFixed(1) : '-',
     pendingAction: pending,
-    totalAssigned: homeworks.value.length, // Для препода
-    totalCompleted: completed, // Для студента
-    courseAverages
+    totalAssigned: homeworks.value.length,
+    totalCompleted: completed,
+    courseAverages,
   }
 })
 
@@ -149,242 +130,858 @@ const recentGraded = computed(() => {
   return homeworks.value
     .filter(hw => hw.assignments.some(a => a.student_id === user.value.id && a.status === 'graded'))
     .sort((a, b) => b.id - a.id)
-    .slice(0, 5)
+    .slice(0, 6)
 })
+
+const gradeColor = (g) => {
+  if (!g) return '#6b7280'
+  if (g >= 4.5) return '#10b981'
+  if (g >= 3.5) return '#6366f1'
+  if (g >= 2.5) return '#f59e0b'
+  return '#ef4444'
+}
+
+const initials = computed(() => {
+  if (!user.value) return '?'
+  const name = user.value.full_name || user.value.username
+  return name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2)
+})
+
+const displayName = computed(() =>
+  user.value?.full_name || user.value?.username || ''
+)
 
 onMounted(async () => {
   user.value = await fetchUser()
   if (!user.value) return router.push('/login')
-  
-  try {
-    homeworks.value = await hwApi.getHomeworks()
-  } catch (e) { console.error(e) }
+  initProfileForm()
+  try { homeworks.value = await hwApi.getHomeworks() } catch {}
   loading.value = false
 })
-
-function handleLogout() {
-  localStorage.removeItem('token')
-  router.push('/login')
-}
 </script>
 
+<template>
+  <div class="profile-page" v-if="!loading && user">
+    <!-- TOPBAR -->
+    <header class="topbar">
+      <button class="back-btn" @click="router.push('/')">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <line x1="19" y1="12" x2="5" y2="12"/>
+          <polyline points="12 19 5 12 12 5"/>
+        </svg>
+        На главную
+      </button>
+      <div class="topbar-center">Профиль</div>
+      <div class="topbar-right">
+        <button class="settings-btn" @click="showSettings = true" title="Настройки">⚙️</button>
+        <NotificationsBell />
+        <button class="logout-btn" @click="logout">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/>
+            <polyline points="16 17 21 12 16 7"/>
+            <line x1="21" y1="12" x2="9" y2="12"/>
+          </svg>
+          Выйти
+        </button>
+      </div>
+    </header>
+
+    <SettingsModal v-if="showSettings" @close="showSettings = false" />
+
+    <div class="page-body">
+      <!-- LEFT SIDEBAR: User card -->
+      <aside class="user-card">
+        <div class="avatar-wrap">
+          <div class="avatar">{{ initials }}</div>
+          <div class="avatar-ring"></div>
+        </div>
+        <div class="user-displayname">{{ displayName }}</div>
+        <div class="user-handle">@{{ user.username }}</div>
+        <div class="role-badge" :class="user.role">
+          {{ user.role === 'teacher' ? 'Преподаватель' : 'Студент' }}
+        </div>
+        <div class="user-email-display" v-if="user.email">{{ user.email }}</div>
+
+        <!-- KPI pills -->
+        <div class="kpi-pills">
+          <div class="kpi-pill">
+            <span class="kp-val" :style="{ color: gradeColor(parseFloat(stats.avgGrade)) }">
+              {{ stats.avgGrade }}
+            </span>
+            <span class="kp-lbl">Средний балл</span>
+          </div>
+          <div class="kpi-pill">
+            <span class="kp-val amber">{{ stats.pendingAction }}</span>
+            <span class="kp-lbl">{{ user.role === 'teacher' ? 'Ждут проверки' : 'Ожидают выполнения' }}</span>
+          </div>
+          <div class="kpi-pill">
+            <span class="kp-val">{{ user.role === 'teacher' ? stats.totalAssigned : stats.totalCompleted }}</span>
+            <span class="kp-lbl">{{ user.role === 'teacher' ? 'Выдано ДЗ' : 'Сдано ДЗ' }}</span>
+          </div>
+        </div>
+
+        <div class="card-nav">
+          <router-link to="/homeworks" class="card-nav-btn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
+              <polyline points="14 2 14 8 20 8"/>
+            </svg>
+            Задания
+          </router-link>
+          <router-link to="/journal" class="card-nav-btn" v-if="user.role === 'teacher'">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z"/>
+              <path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z"/>
+            </svg>
+            Журнал
+          </router-link>
+          <router-link to="/analytics" class="card-nav-btn" v-if="user.role === 'teacher'">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <line x1="18" y1="20" x2="18" y2="10"/>
+              <line x1="12" y1="20" x2="12" y2="4"/>
+              <line x1="6" y1="20" x2="6" y2="14"/>
+            </svg>
+            Аналитика
+          </router-link>
+        </div>
+      </aside>
+
+      <!-- MAIN PANEL -->
+      <main class="main-panel">
+        <!-- Tabs -->
+        <div class="tabs">
+          <button class="tab" :class="{ active: activeTab === 'profile' }" @click="activeTab = 'profile'">
+            Личные данные
+          </button>
+          <button class="tab" :class="{ active: activeTab === 'stats' }" @click="activeTab = 'stats'">
+            Успеваемость
+          </button>
+          <button class="tab" :class="{ active: activeTab === 'security' }" @click="activeTab = 'security'">
+            Безопасность
+          </button>
+        </div>
+
+        <!-- ── Tab: Profile ── -->
+        <div v-if="activeTab === 'profile'" class="tab-content">
+          <div class="section-header">
+            <h2>Личные данные</h2>
+            <p>Изменения будут применены сразу после сохранения</p>
+          </div>
+
+          <form class="edit-form" @submit.prevent="saveProfile">
+            <div class="field-group">
+              <div class="field">
+                <label class="field-label">Имя пользователя</label>
+                <div class="field-static">
+                  <input class="input disabled" :value="user.username" disabled/>
+                  <span class="field-hint">Имя пользователя изменить нельзя</span>
+                </div>
+              </div>
+              <div class="field">
+                <label class="field-label">Роль</label>
+                <div class="field-static">
+                  <input class="input disabled" :value="user.role === 'teacher' ? 'Преподаватель' : 'Студент'" disabled/>
+                </div>
+              </div>
+            </div>
+
+            <div class="field-group">
+              <div class="field">
+                <label class="field-label">Полное имя</label>
+                <input
+                  class="input"
+                  v-model="profileForm.full_name"
+                  placeholder="Введите ваше имя и фамилию"
+                  maxlength="100"
+                />
+              </div>
+              <div class="field">
+                <label class="field-label">Email</label>
+                <input
+                  class="input"
+                  v-model="profileForm.email"
+                  type="email"
+                  placeholder="example@mail.ru"
+                  maxlength="120"
+                />
+              </div>
+            </div>
+
+            <div class="form-footer">
+              <div class="feedback-msg success" v-if="profileSuccess">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                  <polyline points="20 6 9 17 4 12"/>
+                </svg>
+                {{ profileSuccess }}
+              </div>
+              <div class="feedback-msg error" v-if="profileError">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                  <circle cx="12" cy="12" r="10"/>
+                  <line x1="12" y1="8" x2="12" y2="12"/>
+                  <line x1="12" y1="16" x2="12.01" y2="16"/>
+                </svg>
+                {{ profileError }}
+              </div>
+              <button class="btn-save" type="submit" :disabled="profileSaving">
+                <span v-if="profileSaving">Сохраняем...</span>
+                <span v-else>Сохранить изменения</span>
+              </button>
+            </div>
+          </form>
+        </div>
+
+        <!-- ── Tab: Stats ── -->
+        <div v-if="activeTab === 'stats'" class="tab-content">
+          <div class="section-header">
+            <h2>Успеваемость</h2>
+            <p>Статистика по всем курсам платформы</p>
+          </div>
+
+          <!-- Course averages bar chart -->
+          <div class="chart-block" v-if="Object.keys(stats.courseAverages).length > 0">
+            <div class="chart-title-row">
+              <span class="chart-label">Средний балл по курсам</span>
+              <span class="chart-scale">из 5</span>
+            </div>
+            <div class="bar-chart">
+              <div class="bar-item" v-for="(avg, cid) in stats.courseAverages" :key="cid">
+                <div class="bar-name">{{ cid }}</div>
+                <div class="bar-track">
+                  <div
+                    class="bar-fill"
+                    :style="{ width: (parseFloat(avg) / 5 * 100) + '%', background: gradeColor(parseFloat(avg)) }"
+                  ></div>
+                </div>
+                <div class="bar-val" :style="{ color: gradeColor(parseFloat(avg)) }">{{ avg }}</div>
+              </div>
+            </div>
+          </div>
+          <div class="empty-state" v-else>
+            <div class="es-icon">📊</div>
+            <div class="es-title">Нет данных об успеваемости</div>
+            <div class="es-desc">Здесь появится статистика после выполнения заданий</div>
+          </div>
+
+          <!-- Recent grades -->
+          <div v-if="user.role === 'student' && recentGraded.length > 0">
+            <div class="chart-title-row" style="margin-top: 28px; margin-bottom: 14px;">
+              <span class="chart-label">Последние оценки</span>
+            </div>
+            <div class="grades-list">
+              <div class="grade-row" v-for="hw in recentGraded" :key="hw.id">
+                <div class="gr-left">
+                  <div class="gr-title">{{ hw.title }}</div>
+                  <div class="gr-course">Курс: {{ hw.course_id }}</div>
+                </div>
+                <div
+                  class="gr-score"
+                  :style="{ color: gradeColor(hw.assignments[0]?.grade) }"
+                >
+                  {{ hw.assignments.find(a => a.student_id === user.id)?.grade ?? '—' }}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── Tab: Security ── -->
+        <div v-if="activeTab === 'security'" class="tab-content">
+          <div class="section-header">
+            <h2>Безопасность</h2>
+            <p>Для смены пароля необходимо подтвердить текущий</p>
+          </div>
+
+          <form class="edit-form" @submit.prevent="changePassword">
+            <div class="field">
+              <label class="field-label">Текущий пароль</label>
+              <div class="pwd-wrap">
+                <input
+                  class="input"
+                  v-model="pwdForm.current"
+                  :type="showPwd.current ? 'text' : 'password'"
+                  placeholder="Введите текущий пароль"
+                  autocomplete="current-password"
+                  required
+                />
+                <button type="button" class="eye-btn" @click="showPwd.current = !showPwd.current">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                    <path v-if="!showPwd.current" d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle v-if="!showPwd.current" cx="12" cy="12" r="3"/>
+                    <path v-if="showPwd.current" d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/>
+                    <line v-if="showPwd.current" x1="1" y1="1" x2="23" y2="23"/>
+                  </svg>
+                </button>
+              </div>
+            </div>
+
+            <div class="field-group" style="margin-top: 8px;">
+              <div class="field">
+                <label class="field-label">Новый пароль</label>
+                <div class="pwd-wrap">
+                  <input
+                    class="input"
+                    v-model="pwdForm.newPwd"
+                    :type="showPwd.newPwd ? 'text' : 'password'"
+                    placeholder="Минимум 6 символов"
+                    autocomplete="new-password"
+                    required
+                  />
+                  <button type="button" class="eye-btn" @click="showPwd.newPwd = !showPwd.newPwd">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                      <path v-if="!showPwd.newPwd" d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle v-if="!showPwd.newPwd" cx="12" cy="12" r="3"/>
+                      <path v-if="showPwd.newPwd" d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/>
+                      <line v-if="showPwd.newPwd" x1="1" y1="1" x2="23" y2="23"/>
+                    </svg>
+                  </button>
+                </div>
+                <!-- Strength indicator -->
+                <div class="pwd-strength" v-if="pwdForm.newPwd">
+                  <div class="strength-bar">
+                    <div
+                      class="strength-fill"
+                      :style="{
+                        width: pwdForm.newPwd.length >= 12 ? '100%' : pwdForm.newPwd.length >= 8 ? '66%' : pwdForm.newPwd.length >= 6 ? '33%' : '10%',
+                        background: pwdForm.newPwd.length >= 12 ? '#10b981' : pwdForm.newPwd.length >= 8 ? '#6366f1' : pwdForm.newPwd.length >= 6 ? '#f59e0b' : '#ef4444'
+                      }"
+                    ></div>
+                  </div>
+                  <span class="strength-label">
+                    {{ pwdForm.newPwd.length >= 12 ? 'Надёжный' : pwdForm.newPwd.length >= 8 ? 'Хороший' : pwdForm.newPwd.length >= 6 ? 'Слабый' : 'Очень слабый' }}
+                  </span>
+                </div>
+              </div>
+              <div class="field">
+                <label class="field-label">Подтвердите пароль</label>
+                <div class="pwd-wrap">
+                  <input
+                    class="input"
+                    v-model="pwdForm.confirm"
+                    :type="showPwd.confirm ? 'text' : 'password'"
+                    placeholder="Повторите новый пароль"
+                    autocomplete="new-password"
+                    required
+                  />
+                  <button type="button" class="eye-btn" @click="showPwd.confirm = !showPwd.confirm">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                      <path v-if="!showPwd.confirm" d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle v-if="!showPwd.confirm" cx="12" cy="12" r="3"/>
+                      <path v-if="showPwd.confirm" d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/>
+                      <line v-if="showPwd.confirm" x1="1" y1="1" x2="23" y2="23"/>
+                    </svg>
+                  </button>
+                </div>
+                <div class="match-hint" v-if="pwdForm.confirm" :class="pwdForm.newPwd === pwdForm.confirm ? 'ok' : 'bad'">
+                  {{ pwdForm.newPwd === pwdForm.confirm ? '✓ Пароли совпадают' : '✗ Пароли не совпадают' }}
+                </div>
+              </div>
+            </div>
+
+            <div class="form-footer">
+              <div class="feedback-msg success" v-if="pwdSuccess">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                  <polyline points="20 6 9 17 4 12"/>
+                </svg>
+                {{ pwdSuccess }}
+              </div>
+              <div class="feedback-msg error" v-if="pwdError">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                  <circle cx="12" cy="12" r="10"/>
+                  <line x1="12" y1="8" x2="12" y2="12"/>
+                  <line x1="12" y1="16" x2="12.01" y2="16"/>
+                </svg>
+                {{ pwdError }}
+              </div>
+              <button class="btn-save" type="submit" :disabled="pwdSaving">
+                <span v-if="pwdSaving">Меняем пароль...</span>
+                <span v-else>Изменить пароль</span>
+              </button>
+            </div>
+          </form>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <!-- Loading -->
+  <div class="page-loading" v-else>
+    <div class="loading-spinner"></div>
+    <span>Загрузка профиля...</span>
+  </div>
+</template>
+
 <style scoped>
-.profile-view {
+.profile-page {
   min-height: 100vh;
-  background: #09090b;
-  color: #e4e4e7;
+  background: var(--bg);
+  color: var(--text);
   font-family: 'Inter', system-ui, sans-serif;
-  padding: 24px;
+  display: flex;
+  flex-direction: column;
 }
 
-.header {
+/* ── Topbar ─────────────────────────────────── */
+.topbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 40px;
+  padding: 0 24px;
+  height: 56px;
+  background: rgba(12,12,15,0.85);
+  backdrop-filter: blur(16px);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 50;
+}
+
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.settings-btn {
+  background: transparent;
+  border: none;
+  font-size: 18px;
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: background 0.2s;
+}
+
+.settings-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
 }
 
 .back-btn {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   background: none;
   border: none;
-  color: #a1a1aa;
+  color: var(--text-secondary);
   cursor: pointer;
-  font-size: 16px;
+  font-size: 14px;
+  font-family: inherit;
+  font-weight: 500;
+  padding: 6px 10px;
+  border-radius: 7px;
+  transition: all 0.15s;
 }
-.back-btn:hover { color: #fff; }
+.back-btn:hover { color: var(--text); background: var(--bg-elevated); }
 
-.user-info {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-}
-.avatar {
-  width: 48px; height: 48px;
-  background: linear-gradient(135deg, #6366f1, #3b82f6);
-  border-radius: 50%;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 20px; font-weight: bold; color: #fff;
-}
-.username { margin: 0; font-size: 20px; }
-.role-badge {
-  display: inline-block;
-  background: rgba(99,102,241,0.15);
-  color: #818cf8;
-  padding: 2px 8px;
-  border-radius: 12px;
-  font-size: 12px;
-  margin-top: 4px;
-}
+.topbar-center { font-size: 15px; font-weight: 700; letter-spacing: -0.01em; }
 
 .logout-btn {
-  background: rgba(239, 68, 68, 0.15);
-  color: #f87171;
-  border: 1px solid rgba(239, 68, 68, 0.3);
-  padding: 8px 16px;
-  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--danger);
   cursor: pointer;
-  transition: all 0.2s;
-}
-.logout-btn:hover { background: rgba(239, 68, 68, 0.25); }
-
-.content {
-  max-width: 900px;
-  margin: 0 auto;
-}
-
-.dashboard-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 24px;
-}
-
-.panel {
-  background: #18181b;
-  border: 1px solid rgba(255,255,255,0.05);
-  border-radius: 16px;
-  padding: 24px;
-}
-
-.panel h3 {
-  margin-top: 0;
-  margin-bottom: 20px;
-  font-size: 18px;
-  color: #f3f4f6;
-  border-bottom: 1px solid rgba(255,255,255,0.05);
-  padding-bottom: 12px;
-}
-
-.stats-panel { grid-column: 1 / -1; }
-
-.stats-cards {
-  display: flex;
-  gap: 20px;
-  justify-content: space-around;
-}
-
-.stat-box {
-  text-align: center;
-}
-
-.stat-num {
-  font-size: 40px;
-  font-weight: 700;
-  margin-bottom: 8px;
-}
-
-.stat-title {
-  color: #9ca3af;
-  font-size: 14px;
-}
-
-.css-bar-chart {
-  display: flex;
-  justify-content: space-around;
-  align-items: flex-end;
-  height: 200px;
-  padding-top: 20px;
-}
-
-.bar-wrapper {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-  width: 40px;
-}
-
-.bar-track {
-  width: 100%;
-  height: 150px;
-  background: rgba(255,255,255,0.05);
-  border-radius: 8px;
-  position: relative;
-  display: flex;
-  align-items: flex-end;
-}
-
-.bar-fill {
-  width: 100%;
-  border-radius: 8px;
-  position: relative;
-  transition: height 0.5s ease-out;
-}
-
-.bar-value-tooltip {
-  position: absolute;
-  top: -24px;
-  left: 50%;
-  transform: translateX(-50%);
-  font-size: 12px;
-  font-weight: bold;
-  color: #fff;
-}
-
-.bar-label {
-  font-size: 12px;
-  color: #a1a1aa;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-.grades-list {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.grade-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  background: rgba(255,255,255,0.02);
-  padding: 12px 16px;
-  border-radius: 8px;
-}
-
-.gi-title {
+  font-size: 13px;
+  font-family: inherit;
   font-weight: 500;
-  color: #f3f4f6;
+  padding: 6px 12px;
+  border-radius: 7px;
+  transition: all 0.15s;
+}
+.logout-btn:hover { background: var(--danger-subtle); border-color: rgba(239,68,68,0.3); }
+
+/* ── Layout ─────────────────────────────────── */
+.page-body {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 0;
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 32px 24px;
+  gap: 28px;
+  width: 100%;
+}
+
+/* ── User Card (Sidebar) ────────────────────── */
+.user-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 28px 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  height: fit-content;
+  position: sticky;
+  top: 80px;
+}
+
+.avatar-wrap {
+  position: relative;
+  margin-bottom: 16px;
+}
+
+.avatar {
+  width: 72px; height: 72px;
+  background: linear-gradient(135deg, var(--accent) 0%, #818cf8 100%);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 26px;
+  font-weight: 800;
+  color: white;
+  position: relative;
+  z-index: 1;
+}
+
+.avatar-ring {
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  background: conic-gradient(var(--accent), #818cf8, var(--accent2), var(--accent));
+  opacity: 0.5;
+  animation: ring-spin 4s linear infinite;
+}
+@keyframes ring-spin { to { transform: rotate(360deg); } }
+
+.user-displayname {
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
   margin-bottom: 4px;
 }
 
-.gi-course {
-  font-size: 12px;
-  color: #9ca3af;
+.user-handle {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 10px;
 }
 
-.gi-score {
-  font-size: 20px;
+.role-badge {
+  font-size: 11px;
   font-weight: 700;
-  color: #34d399;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 3px 10px;
+  border-radius: 5px;
+  margin-bottom: 8px;
+}
+.role-badge.student { background: var(--accent-subtle); color: #818cf8; }
+.role-badge.teacher { background: rgba(245,158,11,0.1); color: #f59e0b; }
+
+.user-email-display {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 20px;
 }
 
-.empty-text, .empty-chart {
-  color: #6b7280;
-  text-align: center;
-  font-style: italic;
-  padding: 20px 0;
+.kpi-pills {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 20px;
 }
 
-.loading { text-align: center; color: #a1a1aa; padding: 40px; }
+.kpi-pill {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 10px 14px;
+}
 
-.action-btn {
-  background: #4f46e5;
+.kp-val {
+  font-size: 20px;
+  font-weight: 800;
+  color: var(--text);
+  letter-spacing: -0.02em;
+}
+.kp-val.amber { color: #f59e0b; }
+.kp-lbl { font-size: 12px; color: var(--text-secondary); }
+
+.card-nav {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.card-nav-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border-radius: 8px;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  text-decoration: none;
+  transition: all 0.15s;
+}
+.card-nav-btn:hover { color: var(--text); background: var(--bg-elevated); }
+
+/* ── Main Panel ─────────────────────────────── */
+.main-panel {
+  min-width: 0;
+}
+
+/* Tabs */
+.tabs {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 28px;
+}
+
+.tab {
+  padding: 10px 18px;
+  font-size: 14px;
+  font-weight: 500;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-family: inherit;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: all 0.15s;
+}
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+.tab-content { display: flex; flex-direction: column; gap: 20px; }
+
+/* Section header */
+.section-header { margin-bottom: 6px; }
+.section-header h2 { font-size: 20px; font-weight: 800; letter-spacing: -0.02em; margin: 0 0 4px; }
+.section-header p  { font-size: 14px; color: var(--text-secondary); margin: 0; }
+
+/* ── Edit Form ──────────────────────────────── */
+.edit-form {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  max-width: 480px;
+}
+
+.field-group {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.field-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  letter-spacing: 0.01em;
+}
+
+.input {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 10px 14px;
+  color: var(--text);
+  font-size: 14px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.15s;
+  width: 100%;
+  box-sizing: border-box;
+  height: 42px;
+  flex: 0 0 auto;
+}
+.input:focus { border-color: var(--accent); }
+.input.disabled { opacity: 0.5; cursor: not-allowed; }
+.input::placeholder { color: var(--text-muted); }
+
+.field-hint { font-size: 12px; color: var(--text-muted); }
+
+.form-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+  padding-top: 4px;
+  flex-wrap: wrap;
+}
+
+.btn-save {
+  padding: 10px 22px;
+  background: var(--accent);
   color: white;
   border: none;
-  padding: 12px 24px;
-  border-radius: 8px;
+  border-radius: 9px;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: inherit;
   cursor: pointer;
-  font-size: 16px;
-  font-weight: 500;
-  transition: background 0.2s;
+  transition: all 0.15s;
+  box-shadow: 0 4px 12px rgba(99,102,241,0.25);
 }
-.action-btn:hover { background: #4338ca; }
+.btn-save:hover:not(:disabled) { background: var(--accent-hover); transform: translateY(-1px); }
+.btn-save:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
 
-@media (max-width: 768px) {
-  .dashboard-grid { grid-template-columns: 1fr; }
+/* Feedback messages */
+.feedback-msg {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 8px 12px;
+  border-radius: 8px;
+}
+.feedback-msg.success { background: var(--accent2-subtle); color: var(--accent2); }
+.feedback-msg.error   { background: var(--danger-subtle); color: var(--danger); }
+
+/* Password field */
+.pwd-wrap {
+  position: relative;
+}
+.pwd-wrap .input { padding-right: 44px; }
+.eye-btn {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  transition: color 0.15s;
+}
+.eye-btn:hover { color: var(--text-secondary); }
+
+/* Strength bar */
+.pwd-strength { display: flex; align-items: center; gap: 10px; }
+.strength-bar { flex: 1; height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; }
+.strength-fill { height: 100%; border-radius: 2px; transition: all 0.3s; }
+.strength-label { font-size: 11px; color: var(--text-muted); min-width: 80px; }
+
+/* Match hint */
+.match-hint { font-size: 12px; font-weight: 500; }
+.match-hint.ok  { color: var(--accent2); }
+.match-hint.bad { color: var(--danger); }
+
+/* ── Stats Tab ──────────────────────────────── */
+.chart-block {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 20px 24px;
+}
+
+.chart-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 18px;
+}
+.chart-label { font-size: 14px; font-weight: 700; }
+.chart-scale  { font-size: 12px; color: var(--text-muted); }
+
+.bar-chart { display: flex; flex-direction: column; gap: 14px; }
+
+.bar-item {
+  display: grid;
+  grid-template-columns: 90px 1fr 40px;
+  align-items: center;
+  gap: 12px;
+}
+
+.bar-name { font-size: 13px; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bar-track { height: 8px; background: var(--bg-elevated); border-radius: 4px; overflow: hidden; }
+.bar-fill  { height: 100%; border-radius: 4px; transition: width 0.5s ease; }
+.bar-val   { font-size: 14px; font-weight: 700; text-align: right; }
+
+/* Grades list */
+.grades-list {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.grade-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 20px;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  transition: background 0.12s;
+}
+.grade-row:last-child { border-bottom: none; }
+.grade-row:hover { background: var(--bg-elevated); }
+
+.gr-title  { font-size: 14px; font-weight: 600; color: var(--text); margin-bottom: 3px; }
+.gr-course { font-size: 12px; color: var(--text-muted); }
+.gr-score  { font-size: 22px; font-weight: 800; }
+
+/* Empty state */
+.empty-state {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 48px 24px;
+  text-align: center;
+}
+.es-icon  { font-size: 36px; margin-bottom: 12px; }
+.es-title { font-size: 15px; font-weight: 700; margin-bottom: 6px; }
+.es-desc  { font-size: 14px; color: var(--text-secondary); }
+
+/* ── Page Loading ───────────────────────────── */
+.page-loading {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+.loading-spinner {
+  width: 36px; height: 36px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Responsive ─────────────────────────────── */
+@media (max-width: 860px) {
+  .page-body { grid-template-columns: 1fr; }
+  .user-card { position: static; }
+  .field-group { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 480px) {
+  .page-body { padding: 16px; }
+  .topbar { padding: 0 16px; }
 }
 </style>

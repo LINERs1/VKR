@@ -1,13 +1,14 @@
 import json
 import time
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from app.database import get_db
+from app.database import get_db, SessionLocal
 from app.models.homework import Homework, HomeworkAssignment, HomeworkStatus
 from app.models.user import User, UserRole
+from app.models.notification import Notification
 from app.schemas.homework import (
     HomeworkAiReviewResponse,
     HomeworkAssignmentResponse,
@@ -50,12 +51,13 @@ def _sanitize_content_for_student(content: HomeworkTemplateContent) -> HomeworkT
 
 
 def _attach_content(hw: Homework, *, for_student: bool = False) -> HomeworkResponse:
+    # Set student_name BEFORE model_validate so Pydantic picks it up
+    for a in hw.assignments:
+        a.student_name = a.student.full_name or a.student.username
     resp = HomeworkResponse.model_validate(hw)
     if hw.content_json:
         parsed = HomeworkTemplateContent(**parse_content(hw.content_json))
         resp.content = _sanitize_content_for_student(parsed) if for_student else parsed
-    for a in hw.assignments:
-        a.student_name = a.student.username
     return resp
 
 
@@ -222,6 +224,13 @@ def submit_homework(
         student_quiz_json=assignment.student_quiz_json,
     )
 
+    db.add(Notification(
+        user_id=assignment.homework.teacher_id,
+        title="Сдано задание",
+        message=f"Студент {current_user.username} сдал ДЗ «{assignment.homework.title}».",
+        link=f"/homeworks/{assignment.homework_id}?student={current_user.id}"
+    ))
+
     db.commit()
     db.refresh(assignment)
     assignment.student_name = assignment.student.username
@@ -301,6 +310,13 @@ def grade_homework(
     assignment.grade = grading.grade
     assignment.status = HomeworkStatus.graded.value
 
+    db.add(Notification(
+        user_id=assignment.student_id,
+        title="Оценка за ДЗ",
+        message=f"Преподаватель выставил оценку {grading.grade} за ДЗ «{assignment.homework.title}».",
+        link=f"/homeworks/{assignment.homework_id}"
+    ))
+
     db.commit()
     db.refresh(assignment)
     assignment.student_name = assignment.student.username
@@ -350,4 +366,87 @@ def ai_review_homework(
             detail=f"ИИ недоступен: {e}. Убедитесь, что Ollama запущена.",
         ) from e
 
+    assignment.ai_review_json = json.dumps(result, ensure_ascii=False)
+    db.add(Notification(
+        user_id=current_user.id,
+        title="ИИ-проверка завершена",
+        message=f"Проверка ответа студента {assignment.student.username} по ДЗ «{assignment.homework.title}» завершена.",
+        link=f"/homeworks/{assignment.homework_id}?student={assignment.student_id}"
+    ))
+    db.commit()
+
     return HomeworkAiReviewResponse(**result)
+
+
+def mass_review_task(assignment_ids: list[int], teacher_id: int):
+    # Process assignments one by one
+    db = SessionLocal()
+    try:
+        for assignment_id in assignment_ids:
+            assignment = db.query(HomeworkAssignment).filter(HomeworkAssignment.id == assignment_id).first()
+            if not assignment or assignment.status not in (HomeworkStatus.submitted.value, HomeworkStatus.graded.value) or assignment.ai_review_json:
+                continue
+
+            t0 = time.perf_counter()
+            try:
+                result = review_assignment(assignment.homework, assignment)
+                record_metric(
+                    db,
+                    event_type="ai_homework_review",
+                    user_id=teacher_id,
+                    course_id=assignment.homework.course_id,
+                    duration_ms=(time.perf_counter() - t0) * 1000,
+                    success=True,
+                )
+                assignment.ai_review_json = json.dumps(result, ensure_ascii=False)
+                student_name = assignment.student.full_name or assignment.student.username
+                db.add(Notification(
+                    user_id=teacher_id,
+                    title="ИИ-проверка завершена",
+                    message=f"Проверена работа студента {student_name} по заданию «{assignment.homework.title}».",
+                    link=f"/homeworks/{assignment.homework_id}?student={assignment.student_id}",
+                ))
+                db.commit()
+            except Exception as e:
+                db.rollback()
+                record_metric(
+                    db,
+                    event_type="ai_homework_review",
+                    user_id=teacher_id,
+                    course_id=assignment.homework.course_id,
+                    duration_ms=(time.perf_counter() - t0) * 1000,
+                    success=False,
+                    meta={"error": str(e)[:200]},
+                )
+    finally:
+        db.close()
+
+@router.post("/assignments/review-all")
+def review_all_homeworks(
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.role != UserRole.teacher.value:
+        raise HTTPException(status_code=403, detail="Only teachers can request mass AI review")
+
+    teacher_homeworks = db.query(Homework).filter(
+        or_(Homework.teacher_id == current_user.id, getattr(Homework, "is_demo", False) == True)
+    ).all()
+    if not teacher_homeworks:
+        return {"started": 0}
+        
+    hw_ids = [hw.id for hw in teacher_homeworks]
+
+    assignments = db.query(HomeworkAssignment).filter(
+        HomeworkAssignment.homework_id.in_(hw_ids),
+        HomeworkAssignment.status == HomeworkStatus.submitted.value,
+        HomeworkAssignment.ai_review_json.is_(None)
+    ).all()
+
+    if not assignments:
+        return {"started": 0}
+
+    assignment_ids = [a.id for a in assignments]
+    background_tasks.add_task(mass_review_task, assignment_ids, current_user.id)
+    return {"started": len(assignment_ids)}

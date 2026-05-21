@@ -3,10 +3,17 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.user import User, UserRole
-from app.schemas.adaptive import AnalyticsEventIn, AnalyticsSummaryResponse, ChatHistoryMessage
+from app.schemas.adaptive import (
+    AnalyticsEventIn,
+    AnalyticsSummaryResponse,
+    DetailedAnalyticsResponse,
+)
 from app.services.auth_service import get_current_user, get_current_user_optional
-from app.services.chat_history_service import get_recent_history
-from app.services.metrics_service import build_analytics_summary, record_metric
+from app.services.metrics_service import (
+    build_analytics_summary,
+    build_detailed_analytics,
+    record_metric,
+)
 
 router = APIRouter()
 
@@ -39,3 +46,14 @@ def analytics_summary(
         raise HTTPException(status_code=403, detail="Only teachers can view analytics")
     data = build_analytics_summary(db, days=days)
     return AnalyticsSummaryResponse(**data)
+
+
+@router.get("/detailed")
+def analytics_detailed(
+    days: int = 30,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.role != UserRole.teacher.value:
+        raise HTTPException(status_code=403, detail="Only teachers can view analytics")
+    return build_detailed_analytics(db, days=days)

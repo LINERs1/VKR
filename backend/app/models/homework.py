@@ -39,6 +39,7 @@ class HomeworkAssignment(Base):
     student_quiz_json = Column(Text, nullable=True)
     teacher_feedback = Column(Text, nullable=True)
     grade = Column(Integer, nullable=True)
+    ai_review_json = Column(Text, nullable=True)
 
     homework = relationship("Homework", back_populates="assignments")
     student = relationship("User", foreign_keys=[student_id], back_populates="homeworks_received")
@@ -49,6 +50,16 @@ class HomeworkAssignment(Base):
             return None
         try:
             data = json.loads(self.student_quiz_json)
+            return data if isinstance(data, dict) else None
+        except json.JSONDecodeError:
+            return None
+
+    @property
+    def ai_review(self) -> dict | None:
+        if not self.ai_review_json:
+            return None
+        try:
+            data = json.loads(self.ai_review_json)
             return data if isinstance(data, dict) else None
         except json.JSONDecodeError:
             return None

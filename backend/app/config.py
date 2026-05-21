@@ -58,7 +58,7 @@ class Settings(BaseSettings):
     # Ultravox (Cloud Voice AI)
     # =========================================================
     ULTRAVOX_API_KEY: str = ""          # API ключ с app.ultravox.ai
-    ULTRAVOX_VOICE_ID: str = "d616943f-cf3e-44e3-9de6-336aaaec86c5"
+    ULTRAVOX_VOICE_ID: str = "1a0781ea-6e29-4b9e-8038-7ae01a595299"
     ULTRAVOX_VOICE_SPEED: float = 0.85  # Скорость речи TTS: 1.0 = норма, 0.85 ≈ на 15% медленнее (ElevenLabs: 0.7–1.2)
     ULTRAVOX_MODEL: str = "ultravox-v0.7"  # Модель для звонка — см. GET /api/ultravox/models
     BACKEND_PUBLIC_URL: str = "http://localhost:8000"  # Публичный URL бэкенда (ngrok для разработки)

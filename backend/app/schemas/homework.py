@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 from enum import Enum
 
 from app.schemas.homework_template import HomeworkTemplateContent
@@ -24,6 +24,7 @@ class HomeworkAssignmentResponse(HomeworkAssignmentBase):
     student_quiz: Optional[Dict[str, int]] = None
     teacher_feedback: Optional[str] = None
     grade: Optional[int] = None
+    ai_review: Optional[Any] = None
 
     student_name: Optional[str] = None  # Helper field to return frontend
 

@@ -46,3 +46,14 @@ class AnalyticsSummaryResponse(BaseModel):
     ai_homework_review: MetricStats
     homework_hint: MetricStats
     voice_navigation: dict
+
+
+class DetailedAnalyticsResponse(BaseModel):
+    period_days: int
+    summary: dict
+    daily_events: list
+    perf_by_day: list
+    homework: dict
+    hw_by_day: list
+    student_activity: list
+    weak_topics: list

@@ -283,7 +283,18 @@ async def stream_rag_voice_response(
             if block:
                 ctx["weak_topics_prompt"] = block
 
+        t_rag = time.perf_counter()
         _docs, context, sources = await retrieve_context_for_chat(message, course_id)
+        rag_ms = (time.perf_counter() - t_rag) * 1000
+        if db and current_user:
+            record_metric(
+                db,
+                event_type="chat_rag",
+                user_id=current_user.id,
+                course_id=course_id,
+                duration_ms=rag_ms,
+                success=True,
+            )
 
         yield f"data: {json.dumps({'type': 'sources', 'content': sources})}\n\n"
 

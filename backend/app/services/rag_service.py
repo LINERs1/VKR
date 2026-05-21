@@ -37,7 +37,7 @@ _PROMPT_TEMPLATE = (
     "### НАВИГАЦИЯ\n"
     "{page_info}\n\n"
     "ПРАВИЛА навигации:\n"
-    "- Журнал, Профиль, Главная, Домашние задания — тег [NAVIGATE:/путь] сразу при явной просьбе.\n"
+    "- Журнал, Профиль, Главная, Домашние задания, Аналитика, Мастерская — тег [NAVIGATE:/путь] сразу при явной просьбе.\n"
     "    Главная: [NAVIGATE:/] или [NAVIGATE:]. Примеры: «домой», «на главную» → [NAVIGATE:/].\n"
     "- Переход на ДРУГОЙ КУРС — два шага:\n"
     "    Шаг 1: назови полное название курса, спроси «Перейти на страницу курса «…»?» — БЕЗ тега.\n"
@@ -68,7 +68,7 @@ _GLOBAL_PROMPT_TEMPLATE = (
     "### НАВИГАЦИЯ\n"
     "{page_info}\n\n"
     "ПРАВИЛА навигации:\n"
-    "- Журнал, Профиль, Главная, Домашние задания — тег [NAVIGATE:/путь] сразу при явной просьбе.\n"
+    "- Журнал, Профиль, Главная, Домашние задания, Аналитика, Мастерская — тег [NAVIGATE:/путь] сразу при явной просьбе.\n"
     "    Главная: [NAVIGATE:/] или [NAVIGATE:]. Примеры: «домой», «на главную» → [NAVIGATE:/].\n"
     "    Примеры: «открой профиль» → [NAVIGATE:/profile], «покажи журнал» → [NAVIGATE:/journal].\n"
     "- Переход на КУРС — два шага:\n"
@@ -257,7 +257,7 @@ def ingest_documents(directory: str, course_id: str = "default") -> dict:
     }
 
     store = get_vector_store(course_id)
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=100)
 
     total_chunks = 0
     total_docs = 0
@@ -297,7 +297,7 @@ def ingest_documents_from_db(course, db) -> dict:
     from langchain_core.documents import Document
 
     store = get_vector_store(course.id)
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=100)
 
     total_chunks = 0
     total_docs = 0

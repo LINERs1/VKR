@@ -128,7 +128,16 @@ function formatStatus(status) {
 
     <section class="panel">
       <h2>Домашние задания</h2>
-      <div v-if="!studentHomeworks.length" class="empty">Нет назначенных заданий</div>
+      <div v-if="!studentHomeworks.length" class="empty-state">
+        <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--text-muted); margin-bottom: 12px;">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+          <polyline points="14 2 14 8 20 8"></polyline>
+          <line x1="16" y1="13" x2="8" y2="13"></line>
+          <line x1="16" y1="17" x2="8" y2="17"></line>
+          <polyline points="10 9 9 9 8 9"></polyline>
+        </svg>
+        <div style="font-size: 16px; font-weight: 500; color: var(--text);">Нет назначенных заданий</div>
+      </div>
       <div v-else class="hw-list">
         <div
           v-for="{ hw, assignment: a } in studentHomeworks"
@@ -334,11 +343,18 @@ h1 {
   text-align: center;
 }
 
-.empty,
 .loading {
   text-align: center;
   color: #71717a;
   padding: 32px;
+}
+
+.empty-state {
+  text-align: center;
+  padding: 40px 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
 }
 
 @media (max-width: 640px) {

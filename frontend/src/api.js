@@ -57,6 +57,14 @@ export async function apiFetch(endpoint, options = {}) {
   return res
 }
 
+export const authApi = {
+  updateSettings: (settingsJson) => 
+    apiFetch('/auth/me/settings', { 
+      method: 'PUT', 
+      body: JSON.stringify({ settings_json: JSON.stringify(settingsJson) }) 
+    }),
+}
+
 export const hwApi = {
   getStudents: () => apiFetch('/auth/students'),
   getHomeworks: () => apiFetch('/homework'),
@@ -85,6 +93,10 @@ export const hwApi = {
       method: 'POST',
       timeout: 180_000,
     }),
+  aiReviewAllHomeworks: () =>
+    apiFetch('/homework/assignments/review-all', {
+      method: 'POST',
+    }),
 }
 
 export const adaptiveApi = {
@@ -96,6 +108,12 @@ export const analyticsApi = {
   postEvent: (data) =>
     apiFetch('/analytics/event', { method: 'POST', body: JSON.stringify(data) }),
   getSummary: (days = 7) => apiFetch(`/analytics/summary?days=${days}`),
+}
+
+export const notificationsApi = {
+  get: () => apiFetch('/notifications'),
+  markRead: (id) => apiFetch(`/notifications/${id}/read`, { method: 'PUT' }),
+  clear: () => apiFetch('/notifications', { method: 'DELETE' }),
 }
 
 export const chatApi = {
