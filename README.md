@@ -7,13 +7,30 @@
 - Генерировать "Резюме урока" и мини-тесты ("Квиз") "на лету".
 - Формировать подробную аналитику: активность студентов, статистика ДЗ, слабые темы, производительность ИИ.
 
-## Минимальный запуск (Windows)
+### Запуск через Docker (Самый простой способ)
 
-### Предусловия
+1. Установите [Ollama](https://ollama.com/) и скачайте модели:
+```bash
+ollama pull qwen2.5
+ollama pull nomic-embed-text
+```
+
+2. Запустите проект через Docker:
+```bash
+docker build -t eduai .
+docker run -p 8000:8000 --add-host=host.docker.internal:host-gateway eduai
+```
+3. Откройте `http://localhost:8000` в браузере.
+
+---
+
+### Запуск вручную (Разработка)
+
+#### Предусловия
 
 - **Python**: 3.10+ (рекомендуется 3.11)
 - **Node.js**: 18+ (рекомендуется 20+)
-- **LLM (локально, опционально)**: [Ollama](https://ollama.com/) если используешь `LLM_PROVIDER=ollama`
+- **LLM**: [Ollama](https://ollama.com/)
 
 ### 1) Backend (FastAPI)
 

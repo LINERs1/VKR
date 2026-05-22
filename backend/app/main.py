@@ -129,3 +129,8 @@ async def health():
         "tts_provider": settings.TTS_PROVIDER,
         "tts_voice": settings.TTS_VOICE,
     }
+
+from fastapi.staticfiles import StaticFiles
+import os
+if os.path.exists('static'):
+    app.mount('/', StaticFiles(directory='static', html=True), name='static')
