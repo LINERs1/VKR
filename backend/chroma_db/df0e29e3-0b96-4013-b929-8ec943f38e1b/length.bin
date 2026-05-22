@@ -1,0 +1,1 @@
+invalid type: string "// С async/await (предпочтительно)\ntry {\n    const res = await fetch('/api/users');\n    const data = await res.json();\n} catch (err) {\n    console.error(err);\n}\n\nДеструктуризация:\nconst { name, age } = person;\nconst [first, second, ...rest] = array;\n\nСпред-оператор:\nconst newArr = [...arr1, ...arr2];\n}��������������

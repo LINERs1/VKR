@@ -3,11 +3,11 @@ backend/.venv/
 **/__pycache__/
 **/*.pyc
 backend/.env
-backend/app.db
+# app.db and chroma_db are intentionally pushed so the reviewer has pre-seeded RAG data
 docker/compose.env
 backend/scripts/.tunnel.pid
 tools/
-backend/chroma_db/
+# backend/chroma_db/
 backend/voices/*.mp3
 backend/voices/*.wav
 backend/models/

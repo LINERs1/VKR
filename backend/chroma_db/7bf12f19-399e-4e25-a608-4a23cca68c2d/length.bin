@@ -1,0 +1,8 @@
+from sklearn.ensemble import RandomForestClassifier
+model = RandomForestClassifier(n_estimators=100, max_depth=5)
+model.fit(X_train, y_train)
+
+Преимущества: устойчив к переобучению, работает с пропущенными данными.
+
+Нейронные сети (Neural Networks):
+и обучении.\n\n�ерез награды и наказания������

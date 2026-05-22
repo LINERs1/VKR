@@ -1,0 +1,1 @@
+invalid type: string "Транзакции:\nBEGIN;\nUPDATE accounts SET balance = balance - 1000 WHERE id = 1;\nUPDATE accounts SET balance = balance + 1000 WHERE id = 2;\nCOMMIT; -- или ROLLBACK при ошибке", expected i64- LEFT JOIN: все из левой + совпадения из правой\nSELECT s.name, g.grade\nFROM students s\nLEFT JOIN grades g ON s.id = g.student_id;\n\ns
