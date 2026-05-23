@@ -1,7 +1,13 @@
 <script setup>
 import { ref, nextTick, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { UltravoxSession, AgentReaction } from 'ultravox-client'
+const AgentReaction = { LISTENS: 'LISTENS', SPEAKS: 'SPEAKS' };
+class UltravoxSession {
+  joinCall() { return Promise.reject(new Error('Voice is disabled in prototype')); }
+  leaveCall() {}
+  on() {}
+  sendText() {}
+}
 import { useAuth } from '../composables/useAuth'
 import { hwApi, chatApi, analyticsApi, notificationsApi } from '../api'
 import { checkingAssignments } from '../composables/useNotifications.js'

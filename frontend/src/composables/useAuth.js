@@ -1,9 +1,8 @@
 import { ref } from 'vue'
 import { apiFetch, getApiBaseUrl } from '../api'
 
-const user = ref(null)
-const token = ref(localStorage.getItem('token'))
-
+const user = ref({ id: 1, username: 'Student', role: 'student' })
+const token = ref('dummy_token')
 export function useAuth() {
   const login = async (username, password) => {
     const formData = new FormData()
@@ -35,17 +34,7 @@ export function useAuth() {
   }
 
   const fetchUser = async () => {
-    if (!token.value) return null
-    try {
-      const data = await apiFetch('/auth/me')
-      user.value = data
-      return data
-    } catch (e) {
-      user.value = null
-      token.value = null
-      localStorage.removeItem('token')
-      return null
-    }
+    return user.value
   }
 
   const logout = () => {
@@ -58,7 +47,7 @@ export function useAuth() {
   return {
     user,
     token,
-    isAuthenticated: () => !!token.value,
+    isAuthenticated: () => true,
     login,
     register,
     fetchUser,
