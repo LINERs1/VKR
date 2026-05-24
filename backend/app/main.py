@@ -105,12 +105,14 @@ MOCK_COURSES = [
         "description": "Базовые концепции и алгоритмы",
         "icon": "🤖",
         "tags": ["ML", "AI"],
-        "lessons_count": 0,
-        "duration": "0 мин",
+        "lessons_count": 1,
+        "duration": "20 мин",
         "students": 1500,
         "rating": 4.7,
         "instructor": "Петр Петров",
-        "lessons": []
+        "lessons": [
+            {"id": 1, "title": "Введение в ML", "duration": "20 мин", "content": read_manual("course_3")}
+        ]
     },
     {
         "id": "course_4",
