@@ -3,6 +3,7 @@ import { ref, onMounted, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuth } from '../composables/useAuth'
 import { apiFetch } from '../api'
+import GlassHeader from '../components/GlassHeader.vue'
 import {
   Chart,
   LineController, BarController, DoughnutController,
@@ -391,22 +392,24 @@ onMounted(async () => {
 <template>
   <div class="analytics-page">
     <!-- Header -->
-    <div class="an-header">
-      <div class="an-header-left">
-        <button class="back-btn" @click="router.push('/journal')">
+    <GlassHeader>
+      <div style="display: flex; align-items: center; gap: 16px;">
+        <button class="glass-back-btn" @click="router.push('/journal')">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
             <line x1="19" y1="12" x2="5" y2="12"/>
             <polyline points="12 19 5 12 12 5"/>
           </svg>
           Журнал
         </button>
-        <div class="an-title-block">
-          <h1>Аналитика</h1>
-          <span class="an-subtitle">Детальная статистика платформы EduAI</span>
+        <div style="width:1px; height:24px; background:rgba(255,255,255,0.1);"></div>
+        <div style="display: flex; align-items: center; gap: 12px;">
+          <h1 class="glass-title">Аналитика</h1>
+          <span style="font-size: 13px; color: var(--text-secondary);">Детальная статистика</span>
         </div>
       </div>
-      <div class="an-header-right">
-        <div class="period-selector">
+      <div style="display: flex; align-items: center; gap: 12px;">
+        <div class="animated-period-selector">
+          <div class="period-active-pill" :style="{ transform: `translateX(${[7, 14, 30, 90].indexOf(periodDays) * 100}%)` }"></div>
           <button
             v-for="d in [7, 14, 30, 90]" :key="d"
             class="period-btn"
@@ -414,14 +417,14 @@ onMounted(async () => {
             @click="periodDays = d"
           >{{ d }}д</button>
         </div>
-        <button class="refresh-btn" @click="loadData" :disabled="loading" title="Обновить">
+        <button class="glass-btn" @click="loadData" :disabled="loading" title="Обновить" style="padding: 8px;">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" :class="{ spinning: loading }">
             <polyline points="23 4 23 10 17 10"/>
             <path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/>
           </svg>
         </button>
       </div>
-    </div>
+    </GlassHeader>
 
     <!-- Error state -->
     <div v-if="error" class="error-state">
@@ -726,88 +729,43 @@ onMounted(async () => {
   font-family: 'Inter', system-ui, sans-serif;
 }
 
-/* ── Header ─────────────────────────────────── */
-.an-header {
+.animated-period-selector {
+  position: relative;
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  margin-bottom: 28px;
-  gap: 16px;
-  flex-wrap: wrap;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 40px;
+  padding: 2px;
+  width: 176px;
 }
-
-.an-header-left {
-  display: flex;
-  align-items: center;
-  gap: 16px;
+.period-active-pill {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: calc(25% - 1px);
+  height: calc(100% - 4px);
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 40px;
+  transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
 }
-
-.back-btn {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  color: var(--text-secondary);
-  padding: 8px 12px;
-  border-radius: 8px;
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  font-family: inherit;
-  transition: all 0.15s;
-  flex-shrink: 0;
-}
-.back-btn:hover { color: var(--text); border-color: var(--border-light); }
-
-.an-title-block h1 {
-  font-size: 24px;
-  font-weight: 800;
-  letter-spacing: -0.025em;
-  margin: 0 0 4px;
-}
-.an-subtitle { font-size: 13px; color: var(--text-secondary); }
-
-.an-header-right {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.period-selector {
-  display: flex;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  overflow: hidden;
-}
-
 .period-btn {
-  padding: 7px 12px;
+  flex: 1;
+  position: relative;
+  z-index: 1;
+  padding: 6px 0;
+  text-align: center;
   font-size: 13px;
   font-weight: 500;
-  background: none;
+  background: transparent;
   border: none;
   color: var(--text-secondary);
+  border-radius: 40px;
   cursor: pointer;
   font-family: inherit;
-  transition: all 0.15s;
+  transition: color 0.2s ease;
 }
-.period-btn.active { background: var(--accent); color: white; }
-.period-btn:hover:not(.active) { color: var(--text); }
-
-.refresh-btn {
-  width: 34px; height: 34px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  display: flex; align-items: center; justify-content: center;
-  cursor: pointer;
-  color: var(--text-secondary);
-  transition: all 0.15s;
-}
-.refresh-btn:hover { border-color: var(--border-light); color: var(--text); }
-.refresh-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.period-btn.active { color: var(--text); }
+.period-btn:hover:not(.active) { color: var(--text); }.refresh-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .spinning { animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 

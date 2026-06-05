@@ -1,0 +1,125 @@
+<mxfile host="app.diagrams.net">
+  <diagram name="ER Граф навигации" id="0">
+    <mxGraphModel dx="1414" dy="760" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1169" pageHeight="827" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="e_edge" parent="1" style="swimlane;fontStyle=1;align=center;startSize=28;fillColor=#ffffff;strokeColor=#000000;fontFamily=Helvetica;fontSize=11;swimlaneLine=1;" value="Ребро графа (NavEdge)" vertex="1">
+          <mxGeometry height="130" width="260" x="380" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="e_edge_1" parent="e_edge" style="text;align=left;spacingLeft=8;fillColor=#ffffff;strokeColor=#000000;fontFamily=Helvetica;fontSize=10;html=1;" value="id_edge   &lt;pk&gt;   Serial" vertex="1">
+          <mxGeometry height="25" width="260" y="28" as="geometry" />
+        </mxCell>
+        <mxCell id="e_edge_2" parent="e_edge" style="text;align=left;spacingLeft=8;fillColor=#ffffff;strokeColor=#000000;fontFamily=Helvetica;fontSize=10;" value="relationship_type_edge   Variable characters (50)" vertex="1">
+          <mxGeometry height="25" width="260" y="53" as="geometry" />
+        </mxCell>
+        <mxCell id="e_edge_3" parent="e_edge" style="text;align=left;spacingLeft=8;fillColor=#ffffff;strokeColor=#000000;fontFamily=Helvetica;fontSize=10;" value="weight_edge   Integer" vertex="1">
+          <mxGeometry height="25" width="260" y="78" as="geometry" />
+        </mxCell>
+        <mxCell id="e_edge_4" parent="e_edge" style="text;align=left;spacingLeft=8;fillColor=#ffffff;strokeColor=#000000;fontFamily=Helvetica;fontSize=10;fontStyle=2;" value="Identifier_1   &lt;pi&gt;" vertex="1">
+          <mxGeometry height="25" width="260" y="103" as="geometry" />
+        </mxCell>
+        <mxCell id="e_node" parent="1" style="swimlane;fontStyle=1;align=center;startSize=28;fillColor=#ffffff;strokeColor=#000000;fontFamily=Helvetica;fontSize=11;swimlaneLine=1;" value="Узел графа (NavNode)" vertex="1">
+          <mxGeometry height="205" width="270" x="380" y="300" as="geometry" />
+        </mxCell>
+        <mxCell id="e_node_1" parent="e_node" style="text;align=left;spacingLeft=8;fillColor=#ffffff;strokeColor=#000000;fontFamily=Helvetica;fontSize=10;html=1;" value="id_node   &lt;pk&gt;   Serial" vertex="1">
+          <mxGeometry height="25" width="270" y="28" as="geometry" />
+        </mxCell>
+        <mxCell id="e_node_2" parent="e_node" style="text;align=left;spacingLeft=8;fillColor=#ffffff;strokeColor=#000000;fontFamily=Helvetica;fontSize=10;" value="node_type   Variable characters (20)" vertex="1">
+          <mxGeometry height="25" width="270" y="53" as="geometry" />
+        </mxCell>
+        <mxCell id="e_node_3" parent="e_node" style="text;align=left;spacingLeft=8;fillColor=#ffffff;strokeColor=#000000;fontFamily=Helvetica;fontSize=10;" value="node_identifier   Variable characters (255)" vertex="1">
+          <mxGeometry height="25" width="270" y="78" as="geometry" />
+        </mxCell>
+        <mxCell id="e_node_4" parent="e_node" style="text;align=left;spacingLeft=8;fillColor=#ffffff;strokeColor=#000000;fontFamily=Helvetica;fontSize=10;" value="node_title   Variable characters (100)" vertex="1">
+          <mxGeometry height="25" width="270" y="103" as="geometry" />
+        </mxCell>
+        <mxCell id="e_node_5" parent="e_node" style="text;align=left;spacingLeft=8;fillColor=#ffffff;strokeColor=#000000;fontFamily=Helvetica;fontSize=10;" value="node_description   Text" vertex="1">
+          <mxGeometry height="25" width="270" y="128" as="geometry" />
+        </mxCell>
+        <mxCell id="e_node_6" parent="e_node" style="text;align=left;spacingLeft=8;fillColor=#ffffff;strokeColor=#000000;fontFamily=Helvetica;fontSize=10;" value="node_depth   Integer" vertex="1">
+          <mxGeometry height="25" width="270" y="153" as="geometry" />
+        </mxCell>
+        <mxCell id="e_node_7" parent="e_node" style="text;align=left;spacingLeft=8;fillColor=#ffffff;strokeColor=#000000;fontFamily=Helvetica;fontSize=10;fontStyle=2;" value="Identifier_1   &lt;pi&gt;" vertex="1">
+          <mxGeometry height="25" width="270" y="178" as="geometry" />
+        </mxCell>
+        <mxCell id="e_rule" parent="1" style="swimlane;fontStyle=1;align=center;startSize=28;fillColor=#ffffff;strokeColor=#000000;fontFamily=Helvetica;fontSize=11;swimlaneLine=1;" value="Правило доступа (NodeAccessRule)" vertex="1">
+          <mxGeometry height="105" width="260" x="780" y="340" as="geometry" />
+        </mxCell>
+        <mxCell id="e_rule_1" parent="e_rule" style="text;align=left;spacingLeft=8;fillColor=#ffffff;strokeColor=#000000;fontFamily=Helvetica;fontSize=10;html=1;" value="id_rule   &lt;pk&gt;   Serial" vertex="1">
+          <mxGeometry height="25" width="260" y="28" as="geometry" />
+        </mxCell>
+        <mxCell id="e_rule_2" parent="e_rule" style="text;align=left;spacingLeft=8;fillColor=#ffffff;strokeColor=#000000;fontFamily=Helvetica;fontSize=10;" value="allowed_role   Variable characters (50)" vertex="1">
+          <mxGeometry height="25" width="260" y="53" as="geometry" />
+        </mxCell>
+        <mxCell id="e_rule_3" parent="e_rule" style="text;align=left;spacingLeft=8;fillColor=#ffffff;strokeColor=#000000;fontFamily=Helvetica;fontSize=10;fontStyle=2;" value="Identifier_1   &lt;pi&gt;" vertex="1">
+          <mxGeometry height="25" width="260" y="78" as="geometry" />
+        </mxCell>
+        <mxCell id="e_course" parent="1" style="swimlane;fontStyle=1;align=center;startSize=28;fillColor=#ffffff;strokeColor=#000000;fontFamily=Helvetica;fontSize=11;swimlaneLine=1;" value="Курс (Course)" vertex="1">
+          <mxGeometry height="105" width="270" x="380" y="640" as="geometry" />
+        </mxCell>
+        <mxCell id="e_course_1" parent="e_course" style="text;align=left;spacingLeft=8;fillColor=#ffffff;strokeColor=#000000;fontFamily=Helvetica;fontSize=10;html=1;" value="id_course   &lt;pk&gt;   Variable characters (50)" vertex="1">
+          <mxGeometry height="25" width="270" y="28" as="geometry" />
+        </mxCell>
+        <mxCell id="e_course_2" parent="e_course" style="text;align=left;spacingLeft=8;fillColor=#ffffff;strokeColor=#000000;fontFamily=Helvetica;fontSize=10;" value="title_course   Variable characters (200)" vertex="1">
+          <mxGeometry height="25" width="270" y="53" as="geometry" />
+        </mxCell>
+        <mxCell id="e_course_3" parent="e_course" style="text;align=left;spacingLeft=8;fillColor=#ffffff;strokeColor=#000000;fontFamily=Helvetica;fontSize=10;fontStyle=2;" value="Identifier_1   &lt;pi&gt;" vertex="1">
+          <mxGeometry height="25" width="270" y="78" as="geometry" />
+        </mxCell>
+        <mxCell id="e_lesson" parent="1" style="swimlane;fontStyle=1;align=center;startSize=28;fillColor=#ffffff;strokeColor=#000000;fontFamily=Helvetica;fontSize=11;swimlaneLine=1;" value="Урок (Lesson)" vertex="1">
+          <mxGeometry height="105" width="240" x="50" y="340" as="geometry" />
+        </mxCell>
+        <mxCell id="e_lesson_1" parent="e_lesson" style="text;align=left;spacingLeft=8;fillColor=#ffffff;strokeColor=#000000;fontFamily=Helvetica;fontSize=10;html=1;" value="id_lesson   &lt;pk&gt;   Serial" vertex="1">
+          <mxGeometry height="25" width="240" y="28" as="geometry" />
+        </mxCell>
+        <mxCell id="e_lesson_2" parent="e_lesson" style="text;align=left;spacingLeft=8;fillColor=#ffffff;strokeColor=#000000;fontFamily=Helvetica;fontSize=10;" value="title_lesson   Variable characters (200)" vertex="1">
+          <mxGeometry height="25" width="240" y="53" as="geometry" />
+        </mxCell>
+        <mxCell id="e_lesson_3" parent="e_lesson" style="text;align=left;spacingLeft=8;fillColor=#ffffff;strokeColor=#000000;fontFamily=Helvetica;fontSize=10;fontStyle=2;" value="Identifier_1   &lt;pi&gt;" vertex="1">
+          <mxGeometry height="25" width="240" y="78" as="geometry" />
+        </mxCell>
+        <mxCell id="r1" edge="1" parent="1" source="e_edge" style="endArrow=ERmanyToOne;startArrow=ERmandOne;endFill=0;startFill=0;strokeColor=#000000;fontFamily=Helvetica;exitX=0.35;exitY=1;exitDx=0;exitDy=0;entryX=0.35;entryY=0;entryDx=0;entryDy=0;" target="e_node" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="r1_lbl" connectable="0" parent="r1" style="edgeLabel;html=1;align=center;verticalAlign=bottom;resizable=0;points=[];fontFamily=Helvetica;fontSize=9;" value="Является источником" vertex="1">
+          <mxGeometry relative="1" x="-0.3" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="r2" edge="1" parent="1" source="e_edge" style="endArrow=ERmanyToOne;startArrow=ERmandOne;endFill=0;startFill=0;strokeColor=#000000;fontFamily=Helvetica;exitX=0.65;exitY=1;exitDx=0;exitDy=0;entryX=0.65;entryY=0;entryDx=0;entryDy=0;" target="e_node" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="r2_lbl" connectable="0" parent="r2" style="edgeLabel;html=1;align=center;verticalAlign=bottom;resizable=0;points=[];fontFamily=Helvetica;fontSize=9;" value="Является целью" vertex="1">
+          <mxGeometry relative="1" x="0.3" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="r3" edge="1" parent="1" source="e_node" style="endArrow=ERmandOne;startArrow=ERmanyToOne;endFill=0;startFill=0;strokeColor=#000000;fontFamily=Helvetica;" target="e_rule" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="r3_lbl" connectable="0" parent="r3" style="edgeLabel;html=1;align=center;verticalAlign=bottom;resizable=0;points=[];fontFamily=Helvetica;fontSize=9;" value="Определяет права" vertex="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="r4" edge="1" parent="1" source="e_node" style="endArrow=ERzeroToOne;startArrow=ERzeroToOne;endFill=0;startFill=0;strokeColor=#000000;fontFamily=Helvetica;" target="e_course" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="r4_lbl" connectable="0" parent="r4" style="edgeLabel;html=1;align=center;verticalAlign=bottom;resizable=0;points=[];fontFamily=Helvetica;fontSize=9;" value="Привязан к курсу" vertex="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="r5" edge="1" parent="1" source="e_lesson" style="endArrow=ERzeroToOne;startArrow=ERzeroToOne;endFill=0;startFill=0;strokeColor=#000000;fontFamily=Helvetica;" target="e_node" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="r5_lbl" connectable="0" parent="r5" style="edgeLabel;html=1;align=center;verticalAlign=bottom;resizable=0;points=[];fontFamily=Helvetica;fontSize=9;" value="Привязан к уроку" vertex="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

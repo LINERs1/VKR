@@ -104,6 +104,69 @@ COURSES_DATA = [
     }
 ]
 
+def seed_nav_graph(db: Session):
+    from app.models.navigation import NavNode, NavEdge, NodeAccessRule
+    from app.models.course import Course, Lesson
+
+    if db.query(NavNode).first() is not None:
+        return
+
+    nodes_map = {}
+
+    def add_node(identifier, title, depth, n_type="page", roles=["all"], desc=None):
+        node = NavNode(identifier=identifier, title=title, depth=depth, node_type=n_type, description=desc)
+        db.add(node)
+        db.flush()
+        for r in roles:
+            db.add(NodeAccessRule(nav_node_id=node.id, allowed_role=r))
+        nodes_map[identifier] = node
+        return node
+
+    def add_edge(from_id, to_id, rel="navigates_to"):
+        if from_id in nodes_map and to_id in nodes_map:
+            db.add(NavEdge(
+                source_node_id=nodes_map[from_id].id,
+                target_node_id=nodes_map[to_id].id,
+                relationship_type=rel
+            ))
+
+    # 1. Base Pages
+    add_node("/", "Главная", 1)
+    add_node("/profile", "Профиль", 1, roles=["student", "teacher"])
+    add_node("/journal", "Журнал успеваемости", 1, roles=["teacher"])
+    add_node("/homeworks", "Домашние задания", 1)
+    add_node("/analytics", "Аналитика", 1, roles=["teacher"])
+    add_node("/homeworks/workshop", "Мастерская ДЗ", 2, roles=["teacher"])
+
+    # 2. Actions
+    add_node("ACTION:CHECK_HW", "Проверить код ДЗ", 0, n_type="action", roles=["student"])
+    add_node("ACTION:GET_HINT", "Запросить подсказку", 0, n_type="action", roles=["student"])
+
+    # 3. Dynamic content
+    courses = db.query(Course).all()
+    for c in courses:
+        cid = f"/courses/{c.id}"
+        add_node(cid, f"Курс: {c.title}", 2, desc=c.description[:80] if c.description else "")
+        add_edge("/", cid) # Home -> Course
+
+        lessons = db.query(Lesson).filter(Lesson.course_id == c.id).all()
+        for l in lessons:
+            lid = f"/courses/{c.id}?lesson={l.id}"
+            add_node(lid, f"Урок: {l.title}", 3)
+            add_edge(cid, lid) # Course -> Lesson
+            
+            # Link Lesson to actions (simulated incidence)
+            add_edge(lid, "ACTION:CHECK_HW", "can_execute")
+            add_edge(lid, "ACTION:GET_HINT", "can_execute")
+
+    # Connect base pages to home
+    for p in ["/profile", "/journal", "/homeworks", "/analytics"]:
+        add_edge("/", p)
+        add_edge(p, "/")
+
+    db.commit()
+
+
 def seed_database(db: Session):
     if db.query(Course).first() is None:
         for course_data in COURSES_DATA:
@@ -115,3 +178,7 @@ def seed_database(db: Session):
                 lesson = Lesson(**lesson_data, course_id=course.id)
                 db.add(lesson)
         db.commit()
+    
+    # Always try to seed nav graph (it checks if it exists internally)
+    seed_nav_graph(db)
+

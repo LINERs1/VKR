@@ -1,13 +1,16 @@
 <template>
   <div class="workshop-list" v-if="user">
-    <header class="header">
-      <button class="back-btn" @click="$router.push('/homeworks')">← К заданиям</button>
-      <div>
-        <h1>Мастерская ДЗ</h1>
-        <p class="subtitle">Код, тесты с вариантами ответов, письменная часть — затем назначение ученикам</p>
+    <GlassHeader>
+      <div style="display: flex; align-items: center; gap: 16px;">
+        <button class="glass-back-btn" @click="$router.push('/homeworks')">← К заданиям</button>
+        <div style="width:1px; height:24px; background:rgba(255,255,255,0.1);"></div>
+        <div style="display: flex; align-items: center; gap: 12px;">
+          <h1 class="glass-title">Мастерская ДЗ</h1>
+          <p style="margin: 0; font-size: 13px; color: var(--text-secondary);">Код, тесты, письменная часть</p>
+        </div>
       </div>
-      <button class="primary-btn" @click="createNew">+ Новый шаблон</button>
-    </header>
+      <button class="glass-btn glass-btn-primary" @click="createNew">+ Новый шаблон</button>
+    </GlassHeader>
 
     <div v-if="loading" class="loading">Загрузка хранилища…</div>
     <div v-else-if="!templates.length" class="empty">
@@ -41,6 +44,7 @@ import { useRouter } from 'vue-router'
 import { useAuth } from '../composables/useAuth'
 import { workshopApi } from '../api'
 import { apiFetch } from '../api'
+import GlassHeader from '../components/GlassHeader.vue'
 
 const router = useRouter()
 const { fetchUser } = useAuth()

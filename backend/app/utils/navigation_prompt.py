@@ -1,39 +1,13 @@
-"""Общие инструкции навигации для чата и Ultravox."""
-from typing import Any, Dict, List
-
-STATIC_ROUTES = [
-    ("/", "Главная"),
-    ("/journal", "Журнал успеваемости"),
-    ("/profile", "Профиль"),
-    ("/homeworks", "Домашние задания"),
-    ("/analytics", "Аналитика и дашборд"),
-    ("/homeworks/workshop", "Конструктор домашних заданий (Мастерская)"),
-]
-
-_FALLBACK_COURSES = [
-    {"id": "python", "title": "Python для начинающих", "icon": "🐍"},
-    {"id": "ml", "title": "Основы машинного обучения", "icon": "🤖"},
-    {"id": "webdev", "title": "Веб-разработка с нуля", "icon": "🌐"},
-    {"id": "sql", "title": "SQL и базы данных", "icon": "🗃️"},
-]
-
-
-def _static_routes_for_role(role: str | None) -> List[tuple[str, str]]:
-    routes = list(STATIC_ROUTES)
-    if role == "student":
-        routes = [(p, t) for p, t in routes if p not in ("/journal", "/analytics", "/homeworks/workshop")]
-    return routes
-
+"""Общие инструкции навигации для чата и Ultravox (на основе графа БД)."""
+from typing import Any
 
 def build_navigation_prompt(
-    available_courses: List[Dict[str, Any]] | None = None,
+    db_nav_routes: str,
     *,
     voice: bool = False,
-    role: str | None = None,
-    ask_before_navigate: bool = False,
 ) -> str:
-    courses = available_courses or _FALLBACK_COURSES
-    lines: List[str] = []
+    """Оборачивает список маршрутов из БД в инструкции для LLM."""
+    lines = []
 
     if voice:
         lines.extend([
@@ -45,71 +19,84 @@ def build_navigation_prompt(
             "В приветствии и без просьбы пользователя — navigatePage не вызывай.",
             "",
         ])
-        if ask_before_navigate:
-            lines.extend([
-                "ПРАВИЛО ПЕРЕХОДА: Перед любым переходом (на курс, урок, профиль, журнал, ДЗ, оповещения) ты ОБЯЗАН спросить подтверждение.",
-                "Шаг 1: Спроси «Перейти на страницу ...?» (без navigatePage).",
-                "Шаг 2: ТОЛЬКО после ответа «да/давай/ок» вызывай navigatePage.",
-            ])
-        else:
-            lines.extend([
-                "ПРАВИЛО ПЕРЕХОДА: Переходи на нужную страницу без дополнительных вопросов, сразу вызывая инструмент navigatePage.",
-            ])
         lines.extend([
+            "ПРАВИЛО ПЕРЕХОДА: Переходи на нужную страницу без дополнительных вопросов, сразу вызывая инструмент navigatePage. Не спрашивай разрешения.",
+            "ПРАВИЛО ОТВЕТОВ: Если пользователь просто задает вопрос (например, «сколько уроков в курсе Python?»), ответь на него словами, посчитав уроки в списке ниже. НЕ вызывай navigatePage, если пользователь прямо не попросил открыть курс или перейти куда-то.",
+            "НЕДОСТУПНЫЕ ДЕЙСТВИЯ: Если пользователь просит сделать то, чего нет в списке доступных маршрутов или инструментов (например, выйти из аккаунта, сменить тему, удалить профиль), честно ответь, что ты этого пока не умеешь. НИКУДА не переходи.",
+            "СТРОГОЕ ПРАВИЛО: Если пользователь просит открыть урок, которого НЕТ в списке (например, 5-й урок, а в списке только 3), ты ОБЯЗАН отказать сразу. НЕ переходи на страницу курса в надежде найти его там. НЕ пытайся угадать путь. Просто скажи, что такого урока нет.",
+            "ВНИМАНИЕ: Цифры внутри самих путей (например, ?lesson=4) — это внутренние ID базы данных, они НЕ СОВПАДАЮТ с порядковым номером урока! Ищи нужный урок ТОЛЬКО по тексту 'Урок 1', 'Урок 2' и т.д. слева от стрелочки.",
             "",
-            "Используй ТОЛЬКО пути из списка ниже или ссылки из оповещений.",
+            "Используй ТОЛЬКО пути из списка ниже или ссылки из оповещений. Выдумывать пути КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО.",
         ])
     lines.append("")
-    route_fmt = "navigatePage(path=\"{path}\")" if voice else "[NAVIGATE:{path}]"
-    lines.append("Доступные маршруты:")
-    for path, title in _static_routes_for_role(role):
-        lines.append(f"  - {title} → {route_fmt.format(path=path)}")
-
-    lines.append("")
-    lines.append("Курсы (точный id в пути):")
-    for c in courses:
-        cid = c.get("id", "")
-        title = c.get("title", "")
-        desc = (c.get("description") or "")[:80]
-        icon = c.get("icon", "")
-        extra = f" — {desc}" if desc else ""
-        lines.append(
-            f"  - {icon} «{title}» (id: {cid}){extra} → "
-            f"{route_fmt.format(path=f'/courses/{cid}')}"
-        )
-        lessons = c.get("lessons") or []
-        if lessons:
-            lines.append(f"    Уроки курса «{title}»:")
-            for les in lessons:
-                lid = les.get("id")
-                lt = les.get("title", "")
-                lines.append(
-                    f"      · «{lt}» (lesson_id: {lid}) → "
-                    f"{route_fmt.format(path=f'/courses/{cid}?lesson={lid}')}"
-                )
+    lines.append(db_nav_routes)
 
     return "\n".join(lines)
 
 
-def build_navigation_routes_list(
-    available_courses: List[Dict[str, Any]],
-    *,
-    role: str | None = None,
-) -> str:
-    """Только список маршрутов (правила навигации — в основном промпте чата)."""
-    courses = available_courses or _FALLBACK_COURSES
-    lines = ["Список доступных маршрутов и курсов:"]
-    for path, title in _static_routes_for_role(role):
-        lines.append(f"  - {title} → [NAVIGATE:{path}]")
+def build_db_navigation_routes_list(db: Any, role: str | None = None, voice: bool = False) -> str:
+    """Генерация списка маршрутов на основе графа из БД (Матрицы инцидентности)."""
+    from app.models.navigation import NavNode, NodeAccessRule
+    
+    query = db.query(NavNode).join(NodeAccessRule).filter(
+        NodeAccessRule.allowed_role.in_([role, "all"]) if role else NodeAccessRule.allowed_role == "all"
+    ).order_by(NavNode.depth, NavNode.id)
+    
+    nodes = query.all()
+    
+    nodes = query.all()
+    
+    lines = ["Список доступных маршрутов (из графа БД):"]
+    
+    # 1. Сначала обычные страницы
+    pages = [n for n in nodes if n.node_type == "page"]
+    
+    course_lesson_counters = {}
+    
+    for p in pages:
+        title = p.title
+        identifier = p.identifier
+        
+        # Вычисляем порядковый номер урока в курсе
+        if identifier.startswith("/courses/") and "?lesson=" in identifier:
+            course_id = identifier.split("?")[0]
+            if course_id not in course_lesson_counters:
+                course_lesson_counters[course_id] = 1
+            else:
+                course_lesson_counters[course_id] += 1
+            
+            idx = course_lesson_counters[course_id]
+            # Добавляем номер урока в название
+            if title.startswith("Урок:"):
+                title = title.replace("Урок:", f"Урок {idx}:", 1)
+            elif not title.startswith("Урок "):
+                title = f"Урок {idx}: {title}"
+                
+        desc = f" — {p.description}" if p.description else ""
+        
+        if voice:
+            if identifier.startswith("/courses/") and "?lesson=" in identifier:
+                # Use virtual path for lessons: vpath://course_id/lesson/idx
+                course_id = identifier.split("?")[0].replace("/courses/", "")
+                vpath = f"vpath://{course_id}/lesson/{idx}"
+            else:
+                # Use virtual path for normal pages
+                vpath = f"vpath://page{identifier}"
+            route_cmd = f"navigatePage(path=\"{vpath}\")"
+        else:
+            route_cmd = f"[NAVIGATE:{identifier}]"
+            
+        lines.append(f"  - {title}{desc} → {route_cmd}")
+        
     lines.append("")
-    lines.append("Курсы:")
-    for c in courses:
-        cid = c.get("id", "")
-        title = c.get("title", "")
-        icon = c.get("icon", "")
-        lines.append(f"  - {icon} «{title}» → [NAVIGATE:/courses/{cid}]")
-        for les in c.get("lessons") or []:
-            lines.append(
-                f"      · «{les.get('title', '')}» → [NAVIGATE:/courses/{cid}?lesson={les.get('id')}]"
-            )
+    
+    # 2. Потом возможные действия
+    actions = [n for n in nodes if n.node_type == "action"]
+    if actions:
+        lines.append("Доступные действия на платформе:")
+        for a in actions:
+            desc = f" — {a.description}" if a.description else ""
+            lines.append(f"  - {a.title}{desc} → [{a.identifier}]")
+            
     return "\n".join(lines)
+

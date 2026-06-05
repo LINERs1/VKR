@@ -15,6 +15,7 @@ import app.models.assistant_metric  # noqa: F401
 import app.models.user
 import app.models.course
 import app.models.notification  # noqa: F401
+import app.models.navigation  # noqa: F401
 from sqlalchemy import text
 
 # Initialize database

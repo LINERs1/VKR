@@ -156,6 +156,11 @@ async def stream_rag_response(
     full_response = ""
     try:
         ctx = dict(page_context or {})
+        if db:
+            from app.utils.navigation_prompt import build_db_navigation_routes_list
+            role = current_user.role if current_user else None
+            ctx["db_nav_routes"] = build_db_navigation_routes_list(db, role)
+            
         if current_user and current_user.role == UserRole.student.value and db:
             block = build_weak_topics_prompt_block(db, current_user.id, course_id)
             if block:
@@ -397,11 +402,25 @@ async def chat_voice(
 # ---------------------------------------------------------------------------
 
 @router.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest):
+async def chat(
+    request: ChatRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_optional),
+):
     try:
+        ctx = dict(request.page_context or {})
+        from app.utils.navigation_prompt import build_db_navigation_routes_list
+        role = current_user.role if current_user else None
+        ctx["db_nav_routes"] = build_db_navigation_routes_list(db, role)
+        
         _docs, context, sources = await retrieve_context_for_chat(request.message, request.course_id)
-        history_text = format_history([m.model_dump() for m in request.history])
-        chain = get_chain(request.course_name, request.course_id, request.page_context)
+        
+        client_hist = [m.model_dump() for m in request.history]
+        if current_user:
+            client_hist = merge_history(client_hist, get_recent_history(db, current_user.id, request.course_id))
+        history_text = format_history(client_hist)
+        
+        chain = get_chain(request.course_name, request.course_id, ctx, current_user)
         answer = await chain.ainvoke(
             {"context": context, "question": request.message, "history": history_text}
         )

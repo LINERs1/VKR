@@ -3,6 +3,7 @@ import { ref, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { apiFetch, hwApi } from '../api'
 import { useAuth } from '../composables/useAuth'
+import GlassHeader from '../components/GlassHeader.vue'
 
 const router = useRouter()
 const { fetchUser } = useAuth()
@@ -126,12 +127,17 @@ function isClickable(a) {
 
 <template>
   <div class="journal-page">
-    <header class="journal-header">
-      <router-link to="/" class="btn-back">← На главную</router-link>
-      <router-link to="/analytics" class="btn-analytics">Метрики ассистента</router-link>
-      <h1>Журнал успеваемости</h1>
-      <p class="subtitle">Строки — домашние задания по курсам, столбцы — ученики</p>
-    </header>
+    <GlassHeader>
+      <div style="display: flex; align-items: center; gap: 16px;">
+        <router-link to="/" class="glass-back-btn">← На главную</router-link>
+        <div style="width:1px; height:24px; background:rgba(255,255,255,0.1);"></div>
+        <div style="display: flex; align-items: center; gap: 12px;">
+          <h1 class="glass-title">Журнал успеваемости</h1>
+          <p style="margin: 0; font-size: 13px; color: var(--text-secondary);">Строки — ДЗ по курсам, столбцы — ученики</p>
+        </div>
+      </div>
+      <router-link to="/analytics" class="glass-btn glass-btn-primary">Метрики ассистента</router-link>
+    </GlassHeader>
 
     <div v-if="loading" class="loading-state">
       <div class="spinner"></div>
@@ -514,5 +520,9 @@ h1 {
 .empty {
   color: #52525b;
   font-weight: 400;
+}
+
+@media (max-width: 640px) {
+  .stats-row { flex-direction: column; }
 }
 </style>

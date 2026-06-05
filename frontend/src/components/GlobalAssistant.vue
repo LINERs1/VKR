@@ -119,10 +119,10 @@ function lessonContextFields() {
   const lesson = getActiveLessonContext()
   if (!lesson) return {}
   return {
-    lesson_id: lesson.lessonId,
-    lesson_title: lesson.lessonTitle,
-    lesson_index: lesson.lessonIndex,
-    total_lessons: lesson.totalLessons,
+    lesson_id: lesson.lessonId != null ? String(lesson.lessonId) : null,
+    lesson_title: lesson.lessonTitle || null,
+    lesson_index: lesson.lessonIndex != null ? Number(lesson.lessonIndex) : null,
+    total_lessons: lesson.totalLessons != null ? Number(lesson.totalLessons) : null,
   }
 }
 
@@ -405,14 +405,30 @@ function stripNavFromSpeech(text) {
 }
 
 function runVoiceNavigate(params) {
-  const raw = String(params?.path || params?.route || params?.url || '').trim()
+  let raw = String(params?.path || params?.route || params?.url || '').trim()
+  const highlight = String(params?.highlight_text || '').trim()
+  
+  if (raw) {
+    history.value.push({
+      role: 'assistant',
+      content: `*[Система: ИИ осуществляет переход по маршруту ${raw}${highlight ? ` и подсвечивает фрагмент "${highlight}"` : ''}]*`,
+      sources: []
+    })
+    if (isOpen.value) scrollBottom()
+  }
+  
   if (!raw) {
     return {
-      result: 'Ошибка: не указан path. Передай path вида /journal или /courses/python?lesson=2',
+      result: 'Ошибка: не указан путь. Выбери путь из списка.',
       responseType: 'tool-response',
       agentReaction: AgentReaction.SPEAKS,
     }
   }
+  
+  if (highlight) {
+    window.pendingHighlightText = highlight
+  }
+  
   const ok = tryVoiceNavigate(raw)
   if (ok) {
     return {
@@ -451,6 +467,26 @@ function normalizeNavPath(rawPath) {
 function parseNavTarget(rawPath) {
   const raw = String(rawPath || '').trim()
   if (!raw) return null
+  
+  // Handle virtual paths from LLM
+  if (raw.startsWith('vpath://')) {
+    if (raw.startsWith('vpath://page/')) {
+      return { path: raw.replace('vpath://page', '') }
+    }
+    const parts = raw.replace('vpath://', '').split('/')
+    if (parts.length >= 3 && parts[1] === 'lesson') {
+      const cId = parts[0]
+      const lIdx = parseInt(parts[2], 10) - 1 // 1-based to 0-based
+      const courses = allCourses.value || []
+      const c = courses.find(x => x.id === cId)
+      if (c && c.lessons && c.lessons[lIdx]) {
+        return { path: `/courses/${c.id}`, query: { lesson: String(c.lessons[lIdx].id) } }
+      }
+      return null // Lesson index out of bounds
+    }
+    return null
+  }
+  
   let pathname = raw
   let query = {}
   if (raw.includes('?')) {
@@ -628,6 +664,9 @@ function tryVoiceNavigate(rawPath) {
 
   if (samePath && sameLesson) {
     pendingNavPath = null
+    if (window.pendingHighlightText) {
+      window.dispatchEvent(new CustomEvent('eduai-highlight-text'))
+    }
     if (!isRecentVoiceNav()) scheduleVoicePageContextPush(300, true)
     return true
   }
@@ -640,6 +679,14 @@ function tryVoiceNavigate(rawPath) {
   recordNavMetric(true, targetPath)
   router.push(target)
   scheduleVoicePageContextPush(900, true)
+  // Capture highlight text NOW before watch clears it
+  const pendingHL = window.pendingHighlightText || ''
+  if (pendingHL) {
+    setTimeout(() => {
+      // Pass text in event detail so it works even if pendingHighlightText was cleared
+      window.dispatchEvent(new CustomEvent('eduai-highlight-text', { detail: { text: pendingHL } }))
+    }, 1200)
+  }
   return true
 }
 
@@ -655,12 +702,12 @@ function buildVoiceContextMessage() {
   const cname = courseName.value || 'EduAI'
   const lesson = getActiveLessonContext()
   const lessonBlock = lesson
-    ? `- Текущий урок: «${lesson.lessonTitle}» (${lesson.lessonIndex} из ${lesson.totalLessons}, lesson_id: ${lesson.lessonId})\n`
+    ? `- Текущий урок: «${lesson.lessonTitle}» (${lesson.lessonIndex} из ${lesson.totalLessons})\n`
     : ''
   const lessonsList = window.currentCourseLessons || []
   const lessonsBlock =
     lessonsList.length && route.path.startsWith('/courses/')
-      ? `- Уроки на экране: ${lessonsList.map((l) => `«${l.title}» (lesson_id: ${l.id})`).join('; ')}\n`
+      ? `- Уроки курса: ${lessonsList.map((l, i) => `Урок ${i + 1}: «${l.title}»`).join('; ')}\n`
       : ''
   const hw = window.currentHomeworkContext
   const quizCount = hw?.quizItems?.length || 0
@@ -712,6 +759,16 @@ async function runVoiceRagQuery(params) {
     params?.query ??
     params?.parameters?.query ??
     params?.args?.query
+    
+  if (query) {
+    history.value.push({
+      role: 'assistant',
+      content: `*[Система: ИИ выполняет поиск по материалам курса по запросу "${query}"]*`,
+      sources: []
+    })
+    if (isOpen.value) scrollBottom()
+  }
+
   if (!query?.trim()) return 'Нужен поисковый запрос по материалам курса.'
   try {
     const token = localStorage.getItem('token')
@@ -921,21 +978,27 @@ async function syncVoicePageContext() {
   const token = localStorage.getItem('token')
   const headers = { 'Content-Type': 'application/json' }
   if (token) headers['Authorization'] = `Bearer ${token}`
+  const body = {
+    session_id: voiceSessionId,
+    course_id: courseId.value,
+    course_name: courseName.value,
+    current_page: currentPage.value,
+    current_path: route.path,
+    page_content: getPageText(),
+    ...lessonContextFields(),
+    ...homeworkContextFields(),
+  }
   try {
-    await fetch('/api/ultravox/context', {
+    const resp = await fetch('/api/ultravox/context', {
       method: 'POST',
       headers,
-      body: JSON.stringify({
-        session_id: voiceSessionId,
-        course_id: courseId.value,
-        course_name: courseName.value,
-        current_page: currentPage.value,
-        current_path: route.path,
-        page_content: getPageText(),
-        ...lessonContextFields(),
-        ...homeworkContextFields(),
-      }),
+      body: JSON.stringify(body),
     })
+    if (!resp.ok) {
+      const text = await resp.text()
+      console.error('[voice context] 422 body sent:', JSON.stringify(body))
+      console.error('[voice context] 422 response:', text)
+    }
   } catch (e) {
     console.warn('[voice context] sync failed', e)
   }
@@ -1129,6 +1192,29 @@ async function startUltravoxSession() {
         return 'Все оповещения успешно очищены.'
       } catch(e) {
         return 'Не удалось очистить оповещения.'
+      }
+    })
+    uvSession.registerToolImplementation('fillHomeworkForm', (params) => {
+      try {
+        const data = {}
+        if (params?.title)       data.title = String(params.title)
+        if (params?.intro)       data.intro = String(params.intro)
+        if (params?.code_template) data.code_template = String(params.code_template)
+        if (params?.written_part)  data.written_part = String(params.written_part)
+        if (params?.quiz_items) {
+          // quiz_items comes as JSON string or array
+          try {
+            data.quiz_items = typeof params.quiz_items === 'string'
+              ? JSON.parse(params.quiz_items)
+              : params.quiz_items
+          } catch { data.quiz_items = [] }
+        }
+        // Dispatch event to HomeworkWorkshopEditorView
+        window.dispatchEvent(new CustomEvent('eduai-fill-homework', { detail: data }))
+        const filled = Object.keys(data).join(', ')
+        return `Форма заполнена. Заполнены поля: ${filled}. Сохранение произошло автоматически.`
+      } catch (e) {
+        return `Ошибка заполнения формы: ${e.message}`
       }
     })
     await uvSession.joinCall(joinUrl)
@@ -2336,13 +2422,19 @@ function onOrbPointerUp(e) {
           <!-- Input -->
           <div class="wp-input">
             <button class="icon-btn voice-trigger-btn" @click="startVoiceMode('')" title="Голосовой режим">🎤</button>
-            <input
-              v-model="message" 
-              type="text" 
-              placeholder="Спроси что-нибудь..." 
-              @keydown.enter="handleSend()"
-              :disabled="isLoading"
-            />
+            <div class="wp-input-wrap">
+              <input
+                v-model="message"
+                type="text"
+                placeholder="Спроси что-нибудь..."
+                @keydown.enter="handleSend()"
+                :disabled="isLoading"
+                maxlength="1500"
+              />
+              <span class="char-counter" :class="{ 'char-warn': message.length > 1200 }">
+                {{ message.length }}/1500
+              </span>
+            </div>
             <button class="send-btn" @click="handleSend()" :disabled="isLoading || !message.trim()">➤</button>
           </div>
         </div>
@@ -2671,21 +2763,27 @@ function onOrbPointerUp(e) {
 }
 
 .island-stack.expanded {
-  background: #0a0a0a;
+  background: rgba(25, 25, 28, 0.85);
+  backdrop-filter: blur(24px);
   border-radius: 28px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
   overflow: hidden;
   min-width: 300px;
   max-width: min(420px, calc(100vw - 32px));
+  box-shadow: 
+    0 16px 40px rgba(0, 0, 0, 0.6),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
 .island-rgb-shell.active .island-stack.expanded {
-  border: none;
+  border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 28px;
 }
 
 .dynamic-island {
-  background: #000;
+  background: rgba(25, 25, 28, 0.85);
+  backdrop-filter: blur(24px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
   color: #fff;
   border-radius: 999px;
   height: 40px;
@@ -2696,11 +2794,19 @@ function onOrbPointerUp(e) {
   justify-content: center;
   gap: 8px;
   cursor: pointer;
-  box-shadow: none;
-  transition: background 0.35s ease, min-width 0.35s ease;
+  box-shadow: 
+    0 8px 24px rgba(0, 0, 0, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  transition: all 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.275);
   user-select: none;
   position: relative;
   z-index: 2;
+}
+
+.island-stack:not(.expanded) .dynamic-island:hover {
+  background: rgba(35, 35, 40, 0.9);
+  border-color: rgba(255, 255, 255, 0.18);
+  transform: scale(1.02);
 }
 
 .island-system-container.is-dragging .dynamic-island {
@@ -2710,28 +2816,28 @@ function onOrbPointerUp(e) {
 .island-stack.expanded .dynamic-island {
   border-radius: 0;
   background: transparent;
+  backdrop-filter: none;
+  border: none;
   min-width: 0;
   width: 100%;
   box-shadow: none;
 }
 
-.island-stack:not(.expanded) .dynamic-island {
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
-}
-
 .island-voice { min-width: 168px; }
-.island-listening { background: #141416; }
-.island-thinking { background: #1a1a1e; }
-.island-speaking { background: #141416; }
+.island-listening, .island-thinking, .island-speaking { background: rgba(255, 255, 255, 0.03); }
 
-.island-rgb-shell.active .island-listening {
-  background: linear-gradient(180deg, #1a1a22 0%, #0d0d10 100%);
-}
-.island-rgb-shell.active .island-thinking {
-  background: linear-gradient(180deg, #22222a 0%, #121216 100%);
-}
+.island-rgb-shell.active .island-listening,
+.island-rgb-shell.active .island-thinking,
 .island-rgb-shell.active .island-speaking {
-  background: linear-gradient(180deg, #181820 0%, #0c0c0f 100%);
+  background: transparent;
+}
+
+.island-icon svg {
+  color: #e4e4e7;
+  transition: color 0.2s;
+}
+.island-stack:not(.expanded) .dynamic-island:hover .island-icon svg {
+  color: #fff;
 }
 
 .island-icon, .island-label, .island-status-text {
@@ -2932,7 +3038,10 @@ function onOrbPointerUp(e) {
 .msg-md :deep(.hw-error) { color: #ef4444; font-weight: 700; }
 
 .wp-input { padding: 12px 16px; border-top: 1px solid var(--border); display: flex; gap: 8px; align-items: center; background: rgba(0,0,0,0.2); }
-.wp-input input { flex: 1; background: transparent; border: none; color: var(--text); font-size: 14px; outline: none; }
+.wp-input-wrap { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.wp-input input { flex: 1; background: transparent; border: none; color: var(--text); font-size: 14px; outline: none; width: 100%; }
+.char-counter { font-size: 10px; color: rgba(255,255,255,0.3); text-align: right; line-height: 1; }
+.char-counter.char-warn { color: #f59e0b; }
 .icon-btn { background: none; border: none; cursor: pointer; color: var(--text); opacity: 0.7; transition: opacity 0.2s; display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 8px; }
 .icon-btn:hover { opacity: 1; background: rgba(255,255,255,0.05); }
 .send-btn { background: var(--accent); color: white; border: none; border-radius: 10px; width: 36px; height: 36px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 16px; transition: transform 0.1s; }

@@ -577,3 +577,24 @@ h2 { font-size: 15px; font-weight: 600; margin: 0 0 14px; letter-spacing: -0.01e
 
 .vc-btn-end { background: var(--danger); color: white; }
 .vc-btn-end:hover { background: #dc2626; }
+
+.glass-back-btn { display: flex; align-items: center; gap: 6px; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); color: var(--text-secondary); padding: 8px 14px; border-radius: 40px; font-size: 13px; font-weight: 500; cursor: pointer; transition: all 0.2s ease; } 
+.glass-back-btn:hover { background: rgba(255, 255, 255, 0.1); color: var(--text); border-color: rgba(255, 255, 255, 0.2); } 
+.glass-title { font-size: 16px; font-weight: 700; color: var(--text); margin: 0; }
+
+.glass-btn { display: flex; align-items: center; gap: 6px; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); color: var(--text); padding: 8px 16px; border-radius: 40px; font-size: 13px; font-weight: 500; cursor: pointer; transition: all 0.2s ease; text-decoration: none; } 
+.glass-btn:hover { background: rgba(255, 255, 255, 0.1); border-color: rgba(255, 255, 255, 0.25); text-shadow: 0 0 10px rgba(255,255,255,0.3); } 
+.glass-btn-primary { background: rgba(99, 102, 241, 0.15); border-color: rgba(99, 102, 241, 0.3); color: #818cf8; } 
+.glass-btn-primary:hover { background: rgba(99, 102, 241, 0.25); border-color: rgba(99, 102, 241, 0.5); color: #fff; text-shadow: 0 0 10px rgba(99,102,241,0.6); }
+
+.glass-btn, .glass-back-btn, .glass-link, .glass-btn-primary, a.glass-btn, a.glass-btn-primary { text-decoration: none !important; }
+
+/* --- Global Responsive Design ------------------------ */
+@media (max-width: 768px) {
+  .page { padding: 24px 16px 80px; }
+  .header { flex-direction: column; align-items: flex-start; gap: 16px; }
+  .title { font-size: 24px; }
+  .glass-btn { width: 100%; justify-content: center; }
+  .glass-title { font-size: 18px; }
+  .topbar-wrapper { padding: 12px 16px; }
+}

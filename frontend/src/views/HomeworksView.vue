@@ -1,21 +1,23 @@
 <template>
   <div class="homeworks-view" v-if="user">
-    <header class="header">
-      <button class="back-btn" @click="$router.push('/profile')">
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M19 12H5M12 19l-7-7 7-7" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-        В профиль
-      </button>
-      <h2>Домашние задания</h2>
+    <GlassHeader>
+      <div style="display: flex; align-items: center; gap: 16px;">
+        <button class="glass-back-btn" @click="$router.push('/profile')">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M19 12H5M12 19l-7-7 7-7" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          В профиль
+        </button>
+        <h2 class="glass-title">Домашние задания</h2>
+      </div>
       <div class="header-actions">
         <NotificationsBell />
-        <button v-if="isTeacher" class="workshop-btn" @click="$router.push('/homeworks/workshop')">
+        <button v-if="isTeacher" class="glass-btn" @click="$router.push('/homeworks/workshop')">
           Мастерская
         </button>
-        <button v-if="isTeacher" class="create-btn" @click="showModal = true">+ Создать ДЗ</button>
+        <button v-if="isTeacher" class="glass-btn glass-btn-primary" @click="showModal = true">+ Создать ДЗ</button>
       </div>
-    </header>
+    </GlassHeader>
 
     <main class="list-container">
       <div v-if="loading" class="loading">Загрузка...</div>
@@ -102,6 +104,7 @@ import { useRouter } from 'vue-router'
 import { useAuth } from '../composables/useAuth'
 import { hwApi } from '../api'
 import NotificationsBell from '../components/NotificationsBell.vue'
+import GlassHeader from '../components/GlassHeader.vue'
 
 const router = useRouter()
 const { fetchUser } = useAuth()
@@ -301,4 +304,10 @@ async function handleCreate() {
 .modal-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 24px; }
 .cancel-btn { background: none; border: none; color: #a1a1aa; cursor: pointer; }
 .submit-btn { background: #4f46e5; color: white; border: none; padding: 8px 16px; border-radius: 8px; cursor: pointer; }
+
+@media (max-width: 640px) {
+  .hw-grid { grid-template-columns: 1fr; }
+  .modal-content { width: 90%; max-width: none; padding: 20px; }
+  .header { flex-direction: column; align-items: flex-start; gap: 16px; }
+}
 </style>

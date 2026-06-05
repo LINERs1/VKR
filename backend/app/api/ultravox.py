@@ -23,7 +23,7 @@ from app.models.course import Course
 from app.services.rag_service import get_retriever, format_docs
 from app.services.homework_journal_service import build_journal_summary, build_reminders
 from app.services.weak_topics_service import build_weak_topics_prompt_block
-from app.utils.navigation_prompt import build_navigation_prompt
+from app.utils.navigation_prompt import build_navigation_prompt, build_db_navigation_routes_list
 from app.utils.role_capabilities import build_role_capabilities_prompt
 
 logger = logging.getLogger(__name__)
@@ -71,6 +71,7 @@ class UpdateVoiceContextRequest(BaseModel):
     assignment_id: Optional[int] = None
     assignment_student: Optional[str] = None
     assignment_status: Optional[str] = None
+    assignment_grade: Optional[float] = None
 
 
 class RagQueryRequest(BaseModel):
@@ -207,9 +208,8 @@ def _build_system_prompt(
     proactive = bool(user_settings.get("ai_proactive"))
 
     role_caps = build_role_capabilities_prompt(role_en, voice=True)
-    nav_instructions = build_navigation_prompt(
-        available_courses, voice=True, role=role_en, ask_before_navigate=ask_nav
-    )
+    db_routes = build_db_navigation_routes_list(db, role=role_en, voice=True)
+    nav_instructions = build_navigation_prompt(db_routes, voice=True)
 
     hw_rules = ""
     extra_tools = ""
@@ -270,9 +270,20 @@ def _build_system_prompt(
 
     behavior_rules.append("4. На приветствие отвечай тепло и коротко, без навигации.")
     behavior_rules.append(f"5. {hw_rules}")
-    behavior_rules.append("6. Для поиска по материалам курса используй инструмент queryKnowledgeBase.")
+    behavior_rules.append("6. ПОИСК ПЕРЕД ОТВЕТОМ: Прежде чем отвечать на любой вопрос по теме курса, ты ОБЯЗАН СНАЧАЛА вызвать queryKnowledgeBase, чтобы найти точную информацию в уроках. ЗАПРЕЩЕНО отвечать из своих знаний до поиска. Только если инструмент вернул 'информация не найдена', ты можешь ответить из своих знаний, но строго по теме вопроса. Если нашел нужный ответ — перейди на урок (navigatePage) и обязательно передай highlight_text с точной цитатой (3-5 слов) для подсветки.")
     if extra_tools:
         behavior_rules.append(f"7. {extra_tools}")
+
+    # Workshop-specific instructions
+    is_on_workshop = (req.current_path or '').startswith('/homeworks/workshop/')
+    if role_en == 'teacher' and is_on_workshop:
+        behavior_rules.append(
+            "8. МАСТЕРСКАЯ ДЗ: Ты сейчас находишься на странице создания домашнего задания. "
+            "Если преподаватель говорит что-то вроде 'создай задание', 'придумай описание', 'напиши тест', 'добавь вопрос', 'заполни код' — "
+            "НЕМЕДЛЕННО вызови инструмент fillHomeworkForm с нужными параметрами. "
+            "Можешь заполнить одно поле или сразу все. Генерируй содержательный, реальный текст задания по теме курса. "
+            "После вызова скажи вслух что именно ты заполнил."
+        )
 
     behavior_rules_str = "\n".join(behavior_rules)
 
@@ -372,12 +383,22 @@ async def create_ultravox_call(
                     "location": "PARAMETER_LOCATION_BODY",
                     "schema": {
                         "description": (
-                            "Маршрут: /, /journal, /profile, /homeworks, "
-                            "/courses/{course_id} или /courses/{course_id}?lesson={lesson_id}"
+                            "Точный маршрут из списка доступных. ЗАПРЕЩЕНО выдумывать маршруты самостоятельно."
                         ),
                         "type": "string",
                     },
                     "required": True,
+                },
+                {
+                    "name": "highlight_text",
+                    "location": "PARAMETER_LOCATION_BODY",
+                    "schema": {
+                        "description": (
+                            "Кусок текста (от 1 до 5 слов), к которому нужно проскроллить и подсветить на странице. Используй этот параметр, если переходишь на урок по результатам поиска и хочешь показать пользователю конкретный найденный абзац."
+                        ),
+                        "type": "string",
+                    },
+                    "required": False,
                 },
             ],
             "client": {},
@@ -451,6 +472,65 @@ async def create_ultravox_call(
                     "Сводка журнала: средний балл, кто не сдал ДЗ, что ждёт проверки, успеваемость по курсам. "
                     "Вызывай на вопросы «кто не сдал», «средний балл», «что на проверке»."
                 ),
+                "client": {},
+            }
+        })
+        # Tool for filling homework form in Workshop (available on /homeworks/workshop/:id)
+        selected_tools.append({
+            "temporaryTool": {
+                "modelToolName": "fillHomeworkForm",
+                "description": (
+                    "Заполняет поля формы создания домашнего задания в Мастерской ДЗ. "
+                    "Вызывай когда преподаватель просит создать задание, написать описание, добавить тест, заполнить шаблон кода или письменную часть. "
+                    "Передавай только те поля, которые нужно заполнить."
+                ),
+                "dynamicParameters": [
+                    {
+                        "name": "title",
+                        "location": "PARAMETER_LOCATION_BODY",
+                        "schema": {
+                            "description": "Название домашнего задания",
+                            "type": "string"
+                        },
+                        "required": False,
+                    },
+                    {
+                        "name": "intro",
+                        "location": "PARAMETER_LOCATION_BODY",
+                        "schema": {
+                            "description": "Описание задания: что должен сделать ученик, критерии оценки",
+                            "type": "string"
+                        },
+                        "required": False,
+                    },
+                    {
+                        "name": "code_template",
+                        "location": "PARAMETER_LOCATION_BODY",
+                        "schema": {
+                            "description": "Шаблон кода с TODO-комментариями для заполнения учеником",
+                            "type": "string"
+                        },
+                        "required": False,
+                    },
+                    {
+                        "name": "written_part",
+                        "location": "PARAMETER_LOCATION_BODY",
+                        "schema": {
+                            "description": "Письменная часть: теоретические вопросы для ученика",
+                            "type": "string"
+                        },
+                        "required": False,
+                    },
+                    {
+                        "name": "quiz_items",
+                        "location": "PARAMETER_LOCATION_BODY",
+                        "schema": {
+                            "description": "Тестовые вопросы. Массив объектов: [{\"question\": \"...\", \"options\": [\"A\",\"B\",\"C\",\"D\"], \"correct_index\": 0}]",
+                            "type": "string"
+                        },
+                        "required": False,
+                    },
+                ],
                 "client": {},
             }
         })
@@ -581,7 +661,7 @@ async def update_voice_context(
 
 
 @router.post("/rag")
-async def rag_query(req: RagQueryRequest):
+async def rag_query(req: RagQueryRequest, db: Session = Depends(get_db)):
     """
     RAG endpoint, который вызывается Ultravox во время разговора.
     Это публичный endpoint — запросы идут от серверов Ultravox, не от пользователя.
@@ -589,16 +669,34 @@ async def rag_query(req: RagQueryRequest):
     try:
         course_id = _resolve_course_id(req.session_id, req.course_id)
         if course_id == "default" or not course_id:
-            return {"results": "Общие знания. Конкретного курса не выбрано."}
+            return {"results": "Информация по данному запросу не найдена в материалах курса."}
 
         retriever = get_retriever(course_id)
         docs = await retriever.ainvoke(req.query)
-        context = format_docs(docs)
+        context = format_docs(docs, db)
 
-        if not context.strip():
+        if not context.strip() or "(материалы курса не найдены)" in context:
             return {"results": "Информация по данному запросу не найдена в материалах курса."}
 
-        return {"results": context}
+        # Extract vpath from the first doc that has it
+        import re
+        vpath_match = re.search(r'vpath://[^\s\]]+', context)
+        vpath = vpath_match.group(0) if vpath_match else None
+
+        # Build instruction for the LLM
+        nav_instruction = ""
+        if vpath:
+            # Find first meaningful phrase from doc content (first 8 words after source line)
+            content_lines = [l for l in context.split('\n') if l.strip() and not l.startswith('[')]
+            highlight_candidate = ' '.join(content_lines[0].split()[:6]) if content_lines else ''
+            nav_instruction = (
+                f"\n\n[ИНСТРУКЦИЯ ДЛЯ ИИ]: Информация найдена. "
+                f"НЕМЕДЛЕННО вызови инструмент navigatePage с path='{vpath}' "
+                f"и highlight_text='{highlight_candidate}'. "
+                f"Только после перехода — кратко ответь пользователю вслух по найденному тексту ниже."
+            )
+
+        return {"results": context + nav_instruction}
 
     except Exception as e:
         logger.error(f"RAG query error: {e}")

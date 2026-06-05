@@ -1,16 +1,18 @@
 <template>
   <div class="workshop-editor" v-if="loaded">
-    <header class="top-bar">
-      <button type="button" class="back-btn" @click="$router.push('/homeworks/workshop')">
-        ← Хранилище
-      </button>
-      <div class="top-actions">
+    <GlassHeader>
+      <div style="display: flex; align-items: center; gap: 16px;">
+        <button type="button" class="glass-back-btn" @click="$router.push('/homeworks/workshop')">
+          ← Хранилище
+        </button>
+      </div>
+      <div style="display: flex; align-items: center; gap: 12px;">
         <span v-if="saving" class="save-hint">Сохранение…</span>
         <span v-else-if="savedAt" class="save-hint ok">Сохранено</span>
-        <button type="button" class="ghost-btn" @click="save" :disabled="saving">Сохранить</button>
-        <button type="button" class="primary-btn" @click="showAssign = true">Назначить ученикам</button>
+        <button type="button" class="glass-btn" @click="save" :disabled="saving">Сохранить</button>
+        <button type="button" class="glass-btn glass-btn-primary" @click="showAssign = true">Назначить ученикам</button>
       </div>
-    </header>
+    </GlassHeader>
 
     <div class="meta-row">
       <div class="field">
@@ -199,6 +201,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuth } from '../composables/useAuth'
 import { workshopApi, hwApi, apiFetch } from '../api'
+import GlassHeader from '../components/GlassHeader.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -267,11 +270,43 @@ onMounted(async () => {
     alert(e.message)
     router.push('/homeworks/workshop')
   }
+  window.addEventListener('eduai-fill-homework', onAiFillHomework)
 })
 
 onUnmounted(() => {
   if (saveTimer) clearTimeout(saveTimer)
+  window.removeEventListener('eduai-fill-homework', onAiFillHomework)
 })
+
+function onAiFillHomework(e) {
+  const data = e.detail || {}
+  let changed = false
+  if (data.title) {
+    form.value.title = data.title
+    changed = true
+  }
+  if (data.intro) {
+    form.value.content.intro = data.intro
+    activeSection.value = 'intro'
+    changed = true
+  }
+  if (data.code_template) {
+    form.value.content.code_template = data.code_template
+    if (!data.intro) activeSection.value = 'code'
+    changed = true
+  }
+  if (data.written_part) {
+    form.value.content.written_part = data.written_part
+    if (!data.intro && !data.code_template) activeSection.value = 'written'
+    changed = true
+  }
+  if (data.quiz_items && Array.isArray(data.quiz_items) && data.quiz_items.length > 0) {
+    form.value.content.quiz_items = data.quiz_items.map(normalizeQuiz)
+    if (!data.intro && !data.code_template && !data.written_part) activeSection.value = 'tests'
+    changed = true
+  }
+  if (changed) scheduleSave()
+}
 
 function scheduleSave() {
   savedAt.value = false

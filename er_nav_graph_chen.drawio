@@ -1,0 +1,82 @@
+<mxfile host="app.diagrams.net">
+  <diagram name="ER - Граф навигации (Чен)" id="0">
+    <mxGraphModel dx="2583" dy="760" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1169" pageHeight="827" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="navEdge" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontStyle=1;fontSize=11;" value="Ребро графа (NavEdge)" vertex="1">
+          <mxGeometry height="60" width="230" x="390" y="20" as="geometry" />
+        </mxCell>
+        <mxCell id="navNode" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontStyle=1;fontSize=11;" value="Узел графа (NavNode)" vertex="1">
+          <mxGeometry height="60" width="220" x="390" y="310" as="geometry" />
+        </mxCell>
+        <mxCell id="nodeRule" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontStyle=1;fontSize=11;" value="Правило доступа (NodeAccessRule)" vertex="1">
+          <mxGeometry height="60" width="220" x="870" y="310" as="geometry" />
+        </mxCell>
+        <mxCell id="course" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontStyle=1;fontSize=11;" value="Курс (Course)" vertex="1">
+          <mxGeometry height="60" width="200" x="400" y="630" as="geometry" />
+        </mxCell>
+        <mxCell id="lesson" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontStyle=1;fontSize=11;" value="Урок (Lesson)" vertex="1">
+          <mxGeometry height="60" width="200" x="-10" y="310" as="geometry" />
+        </mxCell>
+        <mxCell id="r1" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontSize=10;verticalAlign=middle;" value="Является&#xa;источником" vertex="1">
+          <mxGeometry height="90" width="160" x="285" y="148" as="geometry" />
+        </mxCell>
+        <mxCell id="r2" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontSize=10;verticalAlign=middle;" value="Является&#xa;целью" vertex="1">
+          <mxGeometry height="90" width="160" x="565" y="148" as="geometry" />
+        </mxCell>
+        <mxCell id="r3" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontSize=10;verticalAlign=middle;" value="Определяет&#xa;права" vertex="1">
+          <mxGeometry height="80" width="140" x="670" y="300" as="geometry" />
+        </mxCell>
+        <mxCell id="r4" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontSize=10;verticalAlign=middle;" value="Привязан&#xa;к курсу" vertex="1">
+          <mxGeometry height="80" width="140" x="430" y="488" as="geometry" />
+        </mxCell>
+        <mxCell id="r5" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontSize=10;verticalAlign=middle;" value="Привязан&#xa;к уроку" vertex="1">
+          <mxGeometry height="80" width="140" x="220" y="300" as="geometry" />
+        </mxCell>
+
+        <!-- r1: ромб -> NavEdge (1), ромб -> NavNode (N) -->
+        <mxCell id="l1a" edge="1" parent="1" source="r1" style="endArrow=block;endFill=0;endSize=8;startArrow=none;dashed=0;strokeColor=#000000;fontSize=11;fontFamily=Helvetica;exitX=0.22;exitY=0;exitDx=0;exitDy=0;entryX=0.22;entryY=1;entryDx=0;entryDy=0;align=left;verticalAlign=bottom;" target="navEdge" value="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="l1b" edge="1" parent="1" source="r1" style="endArrow=doubleBlock;endFill=0;endSize=7;startArrow=none;dashed=1;strokeColor=#000000;fontSize=11;fontFamily=Helvetica;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.2;entryY=0;entryDx=0;entryDy=0;align=right;verticalAlign=bottom;" target="navNode" value="N">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- r2: ромб -> NavEdge (1), ромб -> NavNode (N) -->
+        <mxCell id="l2a" edge="1" parent="1" source="r2" style="endArrow=block;endFill=0;endSize=8;startArrow=none;dashed=0;strokeColor=#000000;fontSize=11;fontFamily=Helvetica;exitX=0.78;exitY=0;exitDx=0;exitDy=0;entryX=0.78;entryY=1;entryDx=0;entryDy=0;align=right;verticalAlign=bottom;" target="navEdge" value="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="l2b" edge="1" parent="1" source="r2" style="endArrow=doubleBlock;endFill=0;endSize=7;startArrow=none;dashed=1;strokeColor=#000000;fontSize=11;fontFamily=Helvetica;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.8;entryY=0;entryDx=0;entryDy=0;align=left;verticalAlign=bottom;" target="navNode" value="N">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- r3: ромб -> NavNode (1), ромб -> NodeAccessRule (N) -->
+        <mxCell id="l3a" edge="1" parent="1" source="r3" style="endArrow=block;endFill=0;endSize=8;startArrow=none;dashed=0;strokeColor=#000000;fontSize=11;fontFamily=Helvetica;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;align=center;verticalAlign=bottom;" target="navNode" value="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="l3b" edge="1" parent="1" source="r3" style="endArrow=doubleBlock;endFill=0;endSize=7;startArrow=none;dashed=0;strokeColor=#000000;fontSize=11;fontFamily=Helvetica;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;align=center;verticalAlign=bottom;" target="nodeRule" value="N">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- r4: ромб -> NavNode (N, необязательно), ромб -> Course (1, обязательно) -->
+        <mxCell id="l4a" edge="1" parent="1" source="r4" style="endArrow=doubleBlock;endFill=0;endSize=7;startArrow=none;dashed=1;strokeColor=#000000;fontSize=11;fontFamily=Helvetica;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;align=right;verticalAlign=bottom;" target="navNode" value="N">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="l4b" edge="1" parent="1" source="r4" style="endArrow=block;endFill=0;endSize=8;startArrow=none;dashed=0;strokeColor=#000000;fontSize=11;fontFamily=Helvetica;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;align=right;verticalAlign=bottom;" target="course" value="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- r5: ромб -> Lesson (1, обязательно), ромб -> NavNode (1, необязательно) -->
+        <mxCell id="l5a" edge="1" parent="1" source="r5" style="endArrow=block;endFill=0;endSize=8;startArrow=none;dashed=0;strokeColor=#000000;fontSize=11;fontFamily=Helvetica;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;align=center;verticalAlign=bottom;" target="lesson" value="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="l5b" edge="1" parent="1" source="r5" style="endArrow=block;endFill=0;endSize=8;startArrow=none;dashed=1;strokeColor=#000000;fontSize=11;fontFamily=Helvetica;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;align=center;verticalAlign=bottom;" target="navNode" value="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

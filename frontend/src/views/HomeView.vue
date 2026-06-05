@@ -26,41 +26,57 @@ onMounted(async () => {
 <template>
   <div class="home-page">
     <!-- TOPBAR -->
-    <header class="topbar">
-      <div class="topbar-inner">
-        <div class="topbar-brand">
-          <div class="brand-mark">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-              <path d="M12 2L2 7l10 5 10-5-10-5z" fill="currentColor" opacity="0.95"/>
-              <path d="M2 17l10 5 10-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/>
-              <path d="M2 12l10 5 10-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/>
-            </svg>
+    <div class="topbar-wrapper">
+      <div class="ambient-orb orb-1"></div>
+      <div class="ambient-orb orb-2"></div>
+      
+      <header class="topbar">
+        <div class="topbar-inner">
+          <div class="topbar-brand">
+            <div class="brand-mark">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                <path d="M12 2L2 7l10 5 10-5-10-5z" fill="currentColor" opacity="0.95"/>
+                <path d="M2 17l10 5 10-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/>
+                <path d="M2 12l10 5 10-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/>
+              </svg>
+            </div>
+            <span>EduAI</span>
           </div>
-          <span>EduAI</span>
-        </div>
 
-        <nav class="topbar-nav">
-          <a href="#courses" class="nav-link">Курсы</a>
-          <a href="#how" class="nav-link">Возможности</a>
-          <a href="/api/health" target="_blank" class="nav-link nav-status">
-            <span class="status-dot-sm"></span>
-            API
-          </a>
-        </nav>
+          <nav class="topbar-nav">
+            <a href="#courses" class="nav-link">Курсы</a>
+            <a href="#how" class="nav-link">Возможности</a>
+            <a href="/api/health" target="_blank" class="nav-link nav-status">
+              <span class="status-dot-sm"></span>
+              API
+            </a>
+          </nav>
 
-        <div class="topbar-actions" v-if="user">
-          <span class="role-badge" v-if="user.role === 'teacher'">Преподаватель</span>
-          <span class="username-label">{{ user.username }}</span>
-          <router-link to="/journal" class="chip chip-amber" v-if="user.role === 'teacher'">Журнал</router-link>
-          <router-link to="/analytics" class="chip chip-indigo" v-if="user.role === 'teacher'">Аналитика</router-link>
-          <router-link to="/homeworks" class="chip">Задания</router-link>
-          <router-link to="/profile" class="chip">Профиль</router-link>
-          <button @click="logout" class="logout-btn">Выйти</button>
-          <button class="settings-btn" @click="showSettings = true" title="Настройки">⚙️</button>
-          <NotificationsBell />
+          <div class="topbar-actions" v-if="user">
+            <router-link to="/journal" class="glass-link" v-if="user.role === 'teacher'">Журнал</router-link>
+            <router-link to="/analytics" class="glass-link" v-if="user.role === 'teacher'">Аналитика</router-link>
+            <router-link to="/homeworks" class="glass-link">Задания</router-link>
+            
+            <div class="topbar-divider"></div>
+
+            <router-link to="/profile" class="glass-profile">
+              <div class="avatar-ring">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+              </div>
+              <span class="profile-name">{{ user.username }}</span>
+            </router-link>
+            
+            <button class="icon-btn" @click="logout" title="Выйти">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#f43f5e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+            </button>
+            <button class="icon-btn" @click="showSettings = true" title="Настройки">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+            </button>
+            <NotificationsBell />
+          </div>
         </div>
-      </div>
-    </header>
+      </header>
+    </div>
 
     <SettingsModal v-if="showSettings" @close="showSettings = false" />
 
@@ -309,26 +325,67 @@ onMounted(async () => {
   overflow-x: hidden;
 }
 
-/* ─── Topbar ─────────────────────────────────────────────── */
-.topbar {
+/* ─── Topbar Wrapper & Ambient Orbs ──────────────────────── */
+.topbar-wrapper {
   position: sticky;
   top: 0;
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  padding-top: 24px;
   z-index: 100;
-  background: rgba(12, 12, 15, 0.85);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border-bottom: 1px solid var(--border);
+}
+.ambient-orb {
+  position: absolute;
+  top: 0px;
+  width: 400px;
+  height: 200px;
+  border-radius: 50%;
+  filter: blur(80px);
+  z-index: 0;
+  opacity: 0.25;
+  pointer-events: none;
+}
+.orb-1 { left: 10%; background: #00ffc8; }
+.orb-2 { right: 10%; background: #9d4edd; }
+
+/* ─── Topbar ─────────────────────────────────────────────── */
+.topbar {
+  position: relative;
+  max-width: 1100px;
+  width: calc(100% - 48px);
+  border-radius: 100px;
+  z-index: 10;
+  background: rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(32px) saturate(150%);
+  -webkit-backdrop-filter: blur(32px) saturate(150%);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-top: 1px solid rgba(255, 255, 255, 0.2);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4),
+              0 10px 20px rgba(0, 255, 200, 0.1),
+              0 10px 40px rgba(157, 78, 221, 0.1),
+              inset 0 1px 0 rgba(255,255,255,0.05);
+  transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+.topbar:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.2);
+  box-shadow: 0 25px 50px rgba(0, 0, 0, 0.5),
+              0 15px 30px rgba(0, 255, 200, 0.2),
+              0 15px 60px rgba(157, 78, 221, 0.2),
+              inset 0 1px 0 rgba(255,255,255,0.1);
+  transform: translateY(-2px);
 }
 
 .topbar-inner {
   max-width: none;
   width: 100%;
-  margin: 0 auto;
-  padding: 0 24px;
-  height: 56px;
+  padding: 0 32px;
+  height: 64px;
   display: flex;
   align-items: center;
-  gap: 24px;
+  gap: 32px;
 }
 
 .topbar-brand {
@@ -406,55 +463,76 @@ onMounted(async () => {
 .topbar-actions {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 16px;
   flex-shrink: 0;
 }
 
-.role-badge {
-  font-size: 11px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  background: rgba(245,158,11,0.12);
-  color: #f59e0b;
-  padding: 3px 8px;
-  border-radius: 5px;
-}
-
-.username-label {
-  font-size: 13px;
-  color: var(--text-secondary);
-  padding: 0 2px;
-}
-
-.chip {
+.glass-link {
   font-size: 13px;
   font-weight: 500;
-  padding: 5px 10px;
-  border-radius: 7px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
   color: var(--text-secondary);
   text-decoration: none;
-  transition: all 0.15s;
+  transition: all 0.2s ease;
 }
-.chip:hover { border-color: var(--border-light); color: var(--text); }
-.chip-amber { background: rgba(245,158,11,0.08); border-color: rgba(245,158,11,0.2); color: #f59e0b; }
-.chip-indigo { background: var(--accent-subtle); border-color: rgba(99,102,241,0.25); color: #818cf8; }
+.glass-link:hover {
+  color: var(--text);
+  text-shadow: 0 0 10px rgba(255,255,255,0.3);
+}
 
-.logout-btn {
-  font-size: 13px;
-  font-weight: 500;
-  padding: 5px 10px;
-  border-radius: 7px;
-  background: transparent;
-  border: 1px solid var(--border);
-  color: var(--danger);
-  cursor: pointer;
-  transition: all 0.15s;
-  font-family: inherit;
+.topbar-divider {
+  width: 1px;
+  height: 24px;
+  background: rgba(255, 255, 255, 0.1);
 }
-.logout-btn:hover { background: var(--danger-subtle); border-color: rgba(239,68,68,0.3); }
+
+.glass-profile {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-decoration: none;
+  padding: 4px 12px 4px 4px;
+  border-radius: 40px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.05);
+  transition: all 0.2s ease;
+}
+.glass-profile:hover {
+  background: rgba(255,255,255,0.08);
+  border-color: rgba(255,255,255,0.15);
+}
+.avatar-ring {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  box-shadow: 0 0 15px rgba(99,102,241,0.4);
+}
+.profile-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.icon-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: all 0.2s ease;
+}
+.icon-btn:hover {
+  background: rgba(255,255,255,0.08);
+  color: var(--text);
+}
 
 /* ─── Hero ───────────────────────────────────────────────── */
 .hero {

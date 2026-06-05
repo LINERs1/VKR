@@ -5,6 +5,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useAuth } from '../composables/useAuth'
 import { adaptiveApi } from '../api'
 import { getApiBaseUrl } from '../api'
+import GlassHeader from '../components/GlassHeader.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -25,7 +26,16 @@ async function loadCourse(id) {
     const res = await fetch(`/api/courses/${id}`)
     if (!res.ok) { router.push('/'); return }
     course.value = await res.json()
-    currentLesson.value = course.value.lessons[0]
+    
+    // Подхватываем урок из URL, если есть
+    let targetLesson = course.value.lessons[0]
+    if (route.query.lesson) {
+      const id = Number(route.query.lesson)
+      const found = course.value.lessons?.find((l) => l.id === id)
+      if (found) targetLesson = found
+    }
+    currentLesson.value = targetLesson
+    
     publishLessonContext()
     await loadWeakTopics()
   } catch (e) {
@@ -35,7 +45,18 @@ async function loadCourse(id) {
   }
 }
 
-onMounted(() => loadCourse(route.params.id))
+onMounted(() => {
+  loadCourse(route.params.id)
+  if (typeof window !== 'undefined') {
+    window.addEventListener('eduai-highlight-text', (e) => {
+      const textToFind = e?.detail?.text || window.pendingHighlightText
+      if (textToFind) {
+        window.pendingHighlightText = null
+        setTimeout(() => highlightAndScrollToText(textToFind), 600)
+      }
+    })
+  }
+})
 
 watch(() => route.params.id, (newId) => {
   if (newId) loadCourse(newId)
@@ -97,11 +118,92 @@ function goToWeakLesson(item) {
   }
 }
 
-function selectLesson(lesson) { currentLesson.value = lesson }
-function prevLesson() { if (hasPrev.value) currentLesson.value = course.value.lessons[currentIdx.value - 1] }
-function nextLesson() { if (hasNext.value) currentLesson.value = course.value.lessons[currentIdx.value + 1] }
+function selectLesson(lesson) {
+  currentLesson.value = lesson
+  router.replace({ query: { ...route.query, lesson: lesson.id } })
+}
+function prevLesson() { 
+  if (hasPrev.value) selectLesson(course.value.lessons[currentIdx.value - 1]) 
+}
+function nextLesson() { 
+  if (hasNext.value) selectLesson(course.value.lessons[currentIdx.value + 1]) 
+}
 
-watch(currentLesson, () => publishLessonContext(), { flush: 'post' })
+watch(currentLesson, () => {
+  publishLessonContext()
+  
+  if (window.pendingHighlightText) {
+    const textToFind = window.pendingHighlightText;
+    window.pendingHighlightText = null;
+    
+    // Wait for DOM to fully render the new lesson content
+    setTimeout(() => {
+      highlightAndScrollToText(textToFind);
+    }, 800);
+  }
+}, { flush: 'post' })
+
+function highlightAndScrollToText(text) {
+  if (!text) return false;
+  console.log('[highlight] trying to highlight:', text);
+
+  // Normalize: lowercase, strip punctuation, collapse whitespace
+  const normalize = (s) => String(s || '')
+    .toLowerCase()
+    .replace(/[.,/#!$%^&*;:{}=\-_`~()«»""''\n\r\t]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  // Use first 5 words for matching
+  const searchStr = normalize(text).split(' ').filter(Boolean).slice(0, 5).join(' ');
+  if (!searchStr) return false;
+  console.log('[highlight] searching for:', searchStr);
+
+  // Try specific text elements first (most precise), then containers
+  const selectors = [
+    'p', 'li', 'h1', 'h2', 'h3', 'h4', 'h5',
+    'td', 'blockquote', 'pre', 'code',
+    'div', 'span'
+  ];
+
+  for (const sel of selectors) {
+    const elements = document.querySelectorAll('.lesson-article ' + sel + ', .course-content ' + sel);
+    for (const el of elements) {
+      // Skip elements that contain other block elements (avoid matching container divs)
+      if (sel === 'div' || sel === 'span') {
+        const hasBlock = el.querySelector('p, h1, h2, h3, h4, h5, li');
+        if (hasBlock) continue;
+      }
+      const elNorm = normalize(el.innerText || el.textContent || '');
+      if (elNorm.includes(searchStr)) {
+        console.log('[highlight] found in element:', el.tagName, el);
+        // Scroll to element
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        // Apply direct inline highlight style (no CSS class dependency)
+        const origStyle = el.getAttribute('style') || '';
+        el.style.backgroundColor = 'rgba(250, 200, 0, 0.35)';
+        el.style.outline = '2px solid rgba(250, 200, 0, 0.8)';
+        el.style.borderRadius = '6px';
+        el.style.transition = 'all 0.3s ease';
+        // Also add CSS class as backup
+        el.classList.add('ai-highlight-block');
+        setTimeout(() => {
+          el.style.backgroundColor = '';
+          el.style.outline = '';
+          el.style.borderRadius = '';
+          el.style.transition = '';
+          el.classList.remove('ai-highlight-block');
+          if (origStyle) el.setAttribute('style', origStyle);
+          else el.removeAttribute('style');
+        }, 5000);
+        return true;
+      }
+    }
+  }
+
+  console.warn('[highlight] text not found on page:', searchStr);
+  return false;
+}
 
 function onFilesChange(e) { selectedFiles.value = e.target.files }
 
@@ -223,24 +325,24 @@ function closeAiPanel() {
 <template>
   <div class="course-page" v-if="!loading && course">
     <!-- TOP NAVIGATION BAR -->
-    <header class="course-header">
-      <div class="header-left">
-        <button class="back-btn" @click="router.push('/')">
+    <GlassHeader>
+      <div style="display: flex; align-items: center; gap: 16px;">
+        <button class="glass-back-btn" @click="router.push('/')">
           <span class="icon">←</span> Назад
         </button>
-        <div class="header-divider"></div>
-        <div class="current-course-info">
+        <div class="header-divider" style="width:1px; height:24px; background:rgba(255,255,255,0.1);"></div>
+        <div class="current-course-info" style="display:flex; align-items:center; gap:8px;">
           <span class="course-emoji">{{ course.icon }}</span>
-          <h1 class="course-name">{{ course.title }}</h1>
+          <h1 class="glass-title">{{ course.title }}</h1>
         </div>
       </div>
       <div class="header-right">
-        <div class="ai-status">
-          <span class="status-dot"></span>
+        <div class="ai-status" style="display:flex; align-items:center; gap:8px; font-size:13px; color:var(--text-secondary);">
+          <span class="status-dot-sm"></span>
           <span class="status-text">EduAI активен</span>
         </div>
       </div>
-    </header>
+    </GlassHeader>
 
     <div v-if="weakBanner?.items?.length" class="weak-topics-banner">
       <p class="weak-msg">{{ weakBanner.message }}</p>
@@ -261,13 +363,13 @@ function closeAiPanel() {
           <h3 class="section-title">Программа курса</h3>
           <div class="lessons-list">
             <div
-              v-for="lesson in course.lessons"
+              v-for="(lesson, index) in course.lessons"
               :key="lesson.id"
               class="lesson-card"
               :class="{ active: currentLesson?.id === lesson.id }"
               @click="selectLesson(lesson)"
             >
-              <div class="lesson-id">{{ lesson.id }}</div>
+              <div class="lesson-id">{{ index + 1 }}</div>
               <div class="lesson-details">
                 <div class="lesson-card-title">{{ lesson.title }}</div>
                 <div class="lesson-card-meta">⏱ {{ lesson.duration }}</div>
@@ -311,7 +413,7 @@ function closeAiPanel() {
       <main class="course-content">
         <div class="content-wrapper" v-if="currentLesson">
           <div class="lesson-header">
-            <div class="lesson-meta">УРОК {{ currentLesson.id }} ИЗ {{ course.lessons.length }}</div>
+            <div class="lesson-meta">УРОК {{ currentIdx + 1 }} ИЗ {{ course.lessons.length }}</div>
             <h2 class="lesson-main-title">{{ currentLesson.title }}</h2>
             <div class="lesson-badges">
               <span class="badge">⏱ {{ currentLesson.duration }}</span>
@@ -671,26 +773,67 @@ function closeAiPanel() {
   margin: 32px 0;
 }
 
+@keyframes aiHighlightAnim {
+  0% { background-color: rgba(234, 179, 8, 0.5); box-shadow: 0 0 15px rgba(234, 179, 8, 0.5); transform: scale(1.02); }
+  100% { background-color: transparent; box-shadow: none; transform: scale(1); }
+}
+
+.lesson-article :deep(.ai-highlight-block) {
+  animation: aiHighlightAnim 4s ease-out forwards;
+  border-radius: 8px;
+  padding: 4px;
+  margin: -4px;
+  display: inline-block;
+}
+
 .lesson-navigation {
   display: flex;
   justify-content: space-between;
   margin-top: 64px;
   padding-top: 32px;
   border-top: 1px solid rgba(255, 255, 255, 0.05);
+  margin-bottom: 80px;
 }
 
 .nav-btn {
-  padding: 12px 24px;
-  border-radius: 12px;
+  padding: 14px 28px;
+  border-radius: 16px;
   font-size: 15px;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
-.nav-btn.prev { background: transparent; border: 1px solid rgba(255, 255, 255, 0.1); color: #fff; }
-.nav-btn.next { background: #6366f1; border: none; color: white; }
-.nav-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+.nav-btn.prev {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #a1a1aa;
+}
+.nav-btn.prev:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  transform: translateX(-4px);
+}
+
+.nav-btn.next {
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  border: none;
+  color: white;
+  box-shadow: 0 8px 20px rgba(99, 102, 241, 0.3);
+}
+.nav-btn.next:hover:not(:disabled) {
+  transform: translateX(4px);
+  box-shadow: 0 12px 28px rgba(99, 102, 241, 0.5);
+}
+.nav-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+  transform: none !important;
+  box-shadow: none !important;
+}
 
 /* ─── Loader ─────────────────────────────────── */
 .page-loader {
@@ -828,4 +971,45 @@ function closeAiPanel() {
 .arp-content :deep(strong) { color: #e2e8f0; }
 .arp-content :deep(p) { margin: 0 0 10px; }
 .arp-content :deep(h3) { font-size: 15px; color: #e2e8f0; margin: 14px 0 8px; }
+
+/* ─── Responsive Design ──────────────────────── */
+@media (max-width: 900px) {
+  .course-container {
+    flex-direction: column;
+    overflow-y: auto;
+  }
+  .course-sidebar {
+    width: 100%;
+    border-right: none;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    padding: 20px;
+    overflow-y: visible;
+  }
+  .lessons-list {
+    flex-direction: row;
+    overflow-x: auto;
+    padding-bottom: 12px;
+    gap: 12px;
+    -webkit-overflow-scrolling: touch;
+  }
+  .lesson-card {
+    min-width: 240px;
+    flex: 0 0 auto;
+  }
+  .course-content {
+    padding: 24px 16px 80px;
+    overflow-y: visible;
+  }
+  .lesson-main-title {
+    font-size: 32px;
+  }
+  .lesson-navigation {
+    flex-direction: column;
+    gap: 16px;
+  }
+  .nav-btn {
+    width: 100%;
+    justify-content: center;
+  }
+}
 </style>

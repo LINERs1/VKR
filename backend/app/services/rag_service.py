@@ -11,7 +11,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from app.config import settings
 from app.services.llm_service import get_llm
-from app.utils.navigation_prompt import build_navigation_routes_list
+from app.utils.navigation_prompt import build_navigation_prompt
 from app.utils.role_capabilities import build_role_capabilities_prompt
 
 logger = logging.getLogger(__name__)
@@ -32,7 +32,8 @@ _PROMPT_TEMPLATE = (
     "2. Если спрашивают «как дела», «привет» — отвечай кратко и тепло, своими словами.\n"
     "3. Слова «Кортана», «Эдуай», «ассистент» в начале сообщения — обращение к тебе, не имя пользователя.\n"
     "4. Используй материалы курса. Если информации нет — скажи честно и помоги общими знаниями.\n"
-    "5. Отвечай лаконично: 2–4 абзаца. Без лишней воды.\n\n"
+    "5. Отвечай лаконично: 2–4 абзаца. Без лишней воды.\n"
+    "6. ВАЖНО: ответ не должен превышать 400 слов. Если тема требует большего — предложи задать уточняющий вопрос.\n\n"
     "{role_capabilities}\n"
     "### НАВИГАЦИЯ\n"
     "{page_info}\n\n"
@@ -63,7 +64,8 @@ _GLOBAL_PROMPT_TEMPLATE = (
     "1. Отвечай живо, тепло, по-человечески. Не зеркаль вопрос.\n"
     "2. На приветствие и «как дела» — отвечай кратко своими словами.\n"
     "3. Слова «Кортана», «Эдуай», «ассистент» в начале сообщения — обращение к тебе, не имя пользователя.\n"
-    "4. Рассказывай о курсах, помогай выбрать подходящий.\n\n"
+    "4. Рассказывай о курсах, помогай выбрать подходящий.\n"
+    "5. ВАЖНО: ответ не должен превышать 400 слов. Если тема требует большего — предложи задать уточняющий вопрос.\n\n"
     "{role_capabilities}\n"
     "### НАВИГАЦИЯ\n"
     "{page_info}\n\n"
@@ -164,7 +166,14 @@ def get_chain(course_name: str = None, course_id: str = "default", page_context:
     
     available = page_context.get("available_courses", [])
     user_role = current_user.role if current_user else None
-    page_info_parts.append(build_navigation_routes_list(available, role=user_role))
+    
+    # Используем граф из БД, если он передан, иначе откатываемся к старому списку
+    db_nav_routes = page_context.get("db_nav_routes")
+    if db_nav_routes:
+        page_info_parts.append(build_navigation_prompt(db_nav_routes, voice=False))
+    else:
+        page_info_parts.append("Списка маршрутов нет, так как отсутствует подключение к БД в данном контексте.")
+        
     weak_block = (page_context or {}).get("weak_topics_prompt", "")
     if weak_block:
         page_info_parts.append(weak_block)
@@ -195,13 +204,43 @@ def get_chain(course_name: str = None, course_id: str = "default", page_context:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def format_docs(docs: List[Document]) -> str:
+def format_docs(docs: List[Document], db=None) -> str:
     if not docs:
         return "(материалы курса не найдены)"
-    return "\n\n---\n\n".join(
-        f"[{doc.metadata.get('source', 'Unknown')}]\n{doc.page_content}"
-        for doc in docs
-    )
+        
+    from sqlalchemy.orm import Session
+    from app.models.lesson import Lesson
+    
+    formatted_docs = []
+    for doc in docs:
+        source = doc.metadata.get('source', 'Unknown')
+        course_id = doc.metadata.get('course_id')
+        
+        # Попытка извлечь lesson_id из названия (lesson_v2_ID_title.txt или lesson_ID_title.txt)
+        lesson_idx = None
+        if source.startswith("lesson_") and db and course_id:
+            try:
+                # Handle both 'lesson_v2_1_title' and 'lesson_1_title'
+                parts = source.split("_")
+                lesson_id_str = parts[2] if parts[1] == "v2" else parts[1]
+                if lesson_id_str.isdigit():
+                    lesson_id = int(lesson_id_str)
+                    # Вычисляем порядковый номер урока в курсе
+                    lessons = db.query(Lesson).filter(Lesson.course_id == course_id).order_by(Lesson.id).all()
+                    for i, l in enumerate(lessons):
+                        if l.id == lesson_id:
+                            lesson_idx = i + 1
+                            break
+            except Exception as e:
+                logger.error(f"Failed to parse lesson_id from {source}: {e}")
+        
+        vpath_hint = ""
+        if lesson_idx is not None and course_id:
+            vpath_hint = f", Маршрут: vpath://{course_id}/lesson/{lesson_idx}"
+            
+        formatted_docs.append(f"[Источник: {source}{vpath_hint}]\n{doc.page_content}")
+        
+    return "\n\n---\n\n".join(formatted_docs)
 
 
 def format_history(history: list[dict]) -> str:
@@ -303,7 +342,7 @@ def ingest_documents_from_db(course, db) -> dict:
     total_docs = 0
 
     for lesson in course.lessons:
-        source_name = f"lesson_{lesson.id}_{lesson.title}.txt"
+        source_name = f"lesson_v2_{lesson.id}_{lesson.title}.txt"
         try:
             # Пропускаем уже проиндексированные файлы
             if _indexed_source_exists(store, source_name):

@@ -5,6 +5,7 @@ import { useAuth } from '../composables/useAuth'
 import { hwApi, apiFetch } from '../api'
 import NotificationsBell from '../components/NotificationsBell.vue'
 import SettingsModal from '../components/SettingsModal.vue'
+import GlassHeader from '../components/GlassHeader.vue'
 
 const router = useRouter()
 const { fetchUser, logout } = useAuth()
@@ -163,15 +164,15 @@ onMounted(async () => {
 <template>
   <div class="profile-page" v-if="!loading && user">
     <!-- TOPBAR -->
-    <header class="topbar">
-      <button class="back-btn" @click="router.push('/')">
+    <GlassHeader>
+      <button class="glass-back-btn" @click="router.push('/')">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
           <line x1="19" y1="12" x2="5" y2="12"/>
           <polyline points="12 19 5 12 12 5"/>
         </svg>
         На главную
       </button>
-      <div class="topbar-center">Профиль</div>
+      <div class="glass-title">Профиль</div>
       <div class="topbar-right">
         <button class="settings-btn" @click="showSettings = true" title="Настройки">⚙️</button>
         <NotificationsBell />
@@ -184,7 +185,7 @@ onMounted(async () => {
           Выйти
         </button>
       </div>
-    </header>
+    </GlassHeader>
 
     <SettingsModal v-if="showSettings" @close="showSettings = false" />
 
@@ -524,12 +525,26 @@ onMounted(async () => {
   justify-content: space-between;
   padding: 0 24px;
   height: 56px;
-  background: rgba(12,12,15,0.85);
-  backdrop-filter: blur(16px);
-  border-bottom: 1px solid var(--border);
   position: sticky;
-  top: 0;
+  top: 12px;
+  margin: 0 16px;
+  border-radius: 16px;
   z-index: 50;
+  background: rgba(18, 18, 24, 0.45);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4),
+              0 0 15px rgba(0, 255, 200, 0.1),
+              0 0 30px rgba(157, 78, 221, 0.1);
+  transition: all 0.3s ease;
+}
+.topbar:hover {
+  background: rgba(22, 22, 30, 0.55);
+  border-color: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5),
+              0 0 20px rgba(0, 255, 200, 0.15),
+              0 0 40px rgba(157, 78, 221, 0.15);
 }
 
 .topbar-right {
@@ -982,6 +997,6 @@ onMounted(async () => {
 
 @media (max-width: 480px) {
   .page-body { padding: 16px; }
-  .topbar { padding: 0 16px; }
+
 }
 </style>
