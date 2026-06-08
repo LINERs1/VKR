@@ -66,10 +66,10 @@ class Settings(BaseSettings):
     # =========================================================
     # Assistant identity
     # =========================================================
-    ASSISTANT_NAME: str = "Кортана"
+    ASSISTANT_NAME: str = "Голосовой помощник"
     COURSE_NAME: str = "Образовательный курс"
     DEFAULT_COURSE_ID: str = "default"
-    ASSISTANT_GREETING: str = "Привет! Я Кортана. Чем могу помочь?"
+    ASSISTANT_GREETING: str = "Привет! Я Голосовой помощник. Чем могу помочь?"
 
     # =========================================================
     # CORS — через запятую

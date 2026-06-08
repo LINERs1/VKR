@@ -10,7 +10,7 @@ export function useAuth() {
     formData.append('username', username)
     formData.append('password', password)
 
-    const res = await fetch(`${getApiBaseUrl()}/auth/login`, {
+    const res = await fetch(`${getApiBaseUrl('/auth/login')}/auth/login`, {
       method: 'POST',
       body: formData
     })

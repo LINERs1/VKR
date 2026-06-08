@@ -11,7 +11,8 @@ const settings = ref({
   ai_verbosity_short: false,
   ai_proactive: false,
   ai_auto_read_notifs: false,
-  ai_auto_disconnect: false
+  ai_auto_disconnect: false,
+  ai_highlight_trigger: ''
 })
 const loading = ref(false)
 const saved = ref(false)
@@ -25,6 +26,7 @@ onMounted(() => {
       settings.value.ai_proactive = !!parsed.ai_proactive
       settings.value.ai_auto_read_notifs = !!parsed.ai_auto_read_notifs
       settings.value.ai_auto_disconnect = !!parsed.ai_auto_disconnect
+      settings.value.ai_highlight_trigger = parsed.ai_highlight_trigger || ''
     } catch(e) {}
   }
 })
@@ -113,6 +115,21 @@ async function saveSettings() {
             <input type="checkbox" v-model="settings.ai_auto_disconnect" @change="saveSettings">
             <span class="slider"></span>
           </label>
+        </div>
+
+        <div class="setting-item" style="flex-direction: column; align-items: flex-start; gap: 8px;">
+          <div class="setting-info">
+            <span class="setting-title">Кодовое слово для подсветки текста</span>
+            <span class="setting-desc">Если заполнено, ИИ будет искать и подсвечивать фрагменты текста на экране ТОЛЬКО если вы произнесете это слово. Оставьте пустым, чтобы ИИ подсвечивал текст всегда.</span>
+            <span class="setting-warning" style="color: #f59e0b; font-size: 0.75rem; display: block; margin-top: 4px;">⚠️ Требуется перезапуск звонка с ИИ для применения</span>
+          </div>
+          <input 
+            type="text" 
+            v-model="settings.ai_highlight_trigger" 
+            @change="saveSettings" 
+            class="setting-input" 
+            placeholder="Например: подсвети, покажи..."
+          >
         </div>
       </div>
       
@@ -265,5 +282,22 @@ input:checked + .slider:before {
   color: #10b981;
   font-size: 13px;
   font-weight: 500;
+}
+
+.setting-input {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border, #3f3f46);
+  border-radius: 8px;
+  padding: 10px 14px;
+  color: #fff;
+  font-size: 14px;
+  outline: none;
+  transition: all 0.2s;
+}
+
+.setting-input:focus {
+  border-color: #6366f1;
+  background: rgba(255, 255, 255, 0.1);
 }
 </style>

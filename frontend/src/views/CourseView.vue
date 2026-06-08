@@ -33,6 +33,13 @@ async function loadCourse(id) {
       const id = Number(route.query.lesson)
       const found = course.value.lessons?.find((l) => l.id === id)
       if (found) targetLesson = found
+    } else if (route.query.lesson_idx) {
+      const idx = Number(route.query.lesson_idx)
+      if (idx > 0 && idx <= (course.value.lessons?.length || 0)) {
+        targetLesson = course.value.lessons[idx - 1]
+        // Optionally update the URL to have the real lesson ID instead of idx
+        router.replace({ query: { lesson: targetLesson.id } })
+      }
     }
     currentLesson.value = targetLesson
     
@@ -69,6 +76,19 @@ watch(
     const id = Number(lessonId)
     const lesson = course.value.lessons?.find((l) => l.id === id)
     if (lesson) currentLesson.value = lesson
+  },
+)
+
+watch(
+  () => route.query.lesson_idx,
+  (idxStr) => {
+    if (!course.value || idxStr == null || idxStr === '') return
+    const idx = Number(idxStr)
+    if (idx > 0 && idx <= (course.value.lessons?.length || 0)) {
+      const targetLesson = course.value.lessons[idx - 1]
+      currentLesson.value = targetLesson
+      router.replace({ query: { lesson: targetLesson.id } })
+    }
   },
 )
 
@@ -179,22 +199,18 @@ function highlightAndScrollToText(text) {
         console.log('[highlight] found in element:', el.tagName, el);
         // Scroll to element
         el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        // Apply direct inline highlight style (no CSS class dependency)
-        const origStyle = el.getAttribute('style') || '';
-        el.style.backgroundColor = 'rgba(250, 200, 0, 0.35)';
-        el.style.outline = '2px solid rgba(250, 200, 0, 0.8)';
-        el.style.borderRadius = '6px';
-        el.style.transition = 'all 0.3s ease';
-        // Also add CSS class as backup
+        
+        // Remove class if it already exists to restart animation
+        el.classList.remove('ai-highlight-block');
+        
+        // Force reflow
+        void el.offsetWidth;
+        
+        // Apply CSS class
         el.classList.add('ai-highlight-block');
+        
         setTimeout(() => {
-          el.style.backgroundColor = '';
-          el.style.outline = '';
-          el.style.borderRadius = '';
-          el.style.transition = '';
           el.classList.remove('ai-highlight-block');
-          if (origStyle) el.setAttribute('style', origStyle);
-          else el.removeAttribute('style');
         }, 5000);
         return true;
       }
@@ -212,12 +228,25 @@ async function uploadFiles() {
   uploadBusy.value = true
   uploadStatus.value = 'Загружаю…'
   try {
-    const fd = new FormData()
-    for (const f of Array.from(selectedFiles.value)) fd.append('files', f)
-    const res = await fetch(`/api/ingest/upload?course_id=${course.value.id}`, { method: 'POST', body: fd })
-    if (!res.ok) throw new Error(await res.text())
-    const data = await res.json()
-    uploadStatus.value = `✅ Готово: ${data.chunks ?? '?'} чанков проиндексировано`
+    const token = localStorage.getItem('token') || localStorage.getItem('eduai_token')
+    let successCount = 0
+    for (const f of Array.from(selectedFiles.value)) {
+      const fd = new FormData()
+      fd.append('file', f)
+      fd.append('course_id', course.value.id)
+      fd.append('source_type', 'methodology')
+      const res = await fetch('/api/materials', { 
+        method: 'POST', 
+        headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+        body: fd 
+      })
+      if (!res.ok) {
+        const errText = await res.text()
+        throw new Error(errText || 'Ошибка загрузки')
+      }
+      successCount++
+    }
+    uploadStatus.value = `✅ Готово: загружено ${successCount} файлов. Они появятся у ИИ.`
   } catch (e) {
     uploadStatus.value = `❌ Ошибка: ${e.message}`
   } finally {
@@ -273,7 +302,7 @@ async function runAiTool(tool) {
 
   try {
     const token = localStorage.getItem('token')
-    const baseUrl = getApiBaseUrl()
+    const baseUrl = getApiBaseUrl('/chat/stream')
     const res = await fetch(`${baseUrl}/chat/stream`, {
       method: 'POST',
       headers: {
@@ -661,6 +690,7 @@ function closeAiPanel() {
 .lesson-id {
   width: 28px;
   height: 28px;
+  flex-shrink: 0;
   background: rgba(255, 255, 255, 0.05);
   border-radius: 8px;
   display: flex;
@@ -778,7 +808,8 @@ function closeAiPanel() {
   100% { background-color: transparent; box-shadow: none; transform: scale(1); }
 }
 
-.lesson-article :deep(.ai-highlight-block) {
+:deep(.ai-highlight-block),
+.ai-highlight-block {
   animation: aiHighlightAnim 4s ease-out forwards;
   border-radius: 8px;
   padding: 4px;

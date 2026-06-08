@@ -27,3 +27,4 @@ Thumbs.db
 frontend/src/components/*.py
 frontend/src/components/*.script.txt
 frontend/src/debugger.js
+*/.venv/

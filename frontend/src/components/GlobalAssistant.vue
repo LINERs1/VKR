@@ -429,6 +429,17 @@ function runVoiceNavigate(params) {
     window.pendingHighlightText = highlight
   }
   
+  // LOGGING TOOL PARAMS TO DEBUG NAV FAILURES
+  fetch('/api/analytics/event', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ 
+      event_type: 'DEBUG_NAV_TOOL', 
+      user_id: 1, 
+      meta: params 
+    })
+  }).catch(() => {})
+  
   const ok = tryVoiceNavigate(raw)
   if (ok) {
     return {
@@ -458,35 +469,30 @@ function lastVisibleAgentTranscript(transcripts) {
 function normalizeNavPath(rawPath) {
   if (rawPath === undefined || rawPath === null) return null
   let path = String(rawPath).trim()
-  if (path.includes('?')) path = path.split('?')[0]
-  if (!path || /^(home|главная|главную|main)$/i.test(path)) return '/'
+  
+  // Extract query if present to append it back later
+  let queryPart = ''
+  if (path.includes('?')) {
+    const parts = path.split('?')
+    path = parts[0]
+    queryPart = '?' + parts.slice(1).join('?')
+  }
+  
+  if (!path || /^(home|главная|главную|main)$/i.test(path)) return '/' + queryPart
   if (!path.startsWith('/')) path = `/${path}`
-  return path.replace(/\/+$/, '') || '/'
+  return (path.replace(/\/+$/, '') || '/') + queryPart
 }
 
 function parseNavTarget(rawPath) {
   const raw = String(rawPath || '').trim()
   if (!raw) return null
-  
-  // Handle virtual paths from LLM
-  if (raw.startsWith('vpath://')) {
-    if (raw.startsWith('vpath://page/')) {
-      return { path: raw.replace('vpath://page', '') }
-    }
-    const parts = raw.replace('vpath://', '').split('/')
-    if (parts.length >= 3 && parts[1] === 'lesson') {
-      const cId = parts[0]
-      const lIdx = parseInt(parts[2], 10) - 1 // 1-based to 0-based
-      const courses = allCourses.value || []
-      const c = courses.find(x => x.id === cId)
-      if (c && c.lessons && c.lessons[lIdx]) {
-        return { path: `/courses/${c.id}`, query: { lesson: String(c.lessons[lIdx].id) } }
-      }
-      return null // Lesson index out of bounds
-    }
-    return null
+
+  // Legacy vpath://page/ support (just in case old sessions still use it)
+  if (raw.startsWith('vpath://page/')) {
+    return { path: raw.replace('vpath://page', '') }
   }
-  
+
+  // Real path (with optional ?lesson=X query)
   let pathname = raw
   let query = {}
   if (raw.includes('?')) {
@@ -588,10 +594,13 @@ function detectCoursePathInText(text) {
   }
 
   const aliases = [
-    { id: 'python', keys: ['python', 'питон', 'пайтон'] },
+    { id: 'react-30-days-ru', keys: ['react', 'реакт'] },
+    { id: 'js-30-days-ru', keys: ['javascript', 'js', 'джаваскрипт', '30 days'] },
+    { id: 'python-100-days-ru', keys: ['python', 'питон', 'пайтон', '100 дн', 'сто дн'] },
     { id: 'ml', keys: ['машинн', 'machine learning', 'ml '] },
     { id: 'webdev', keys: ['веб-разработ', 'веб разработ', 'webdev', 'frontend'] },
     { id: 'sql', keys: ['sql', 'баз данных', 'postgresql'] },
+    { id: 'algorithms', keys: ['алгоритм', 'алгоритмизации', 'программировани'] },
   ]
   for (const { id, keys } of aliases) {
     if (keys.some(k => lower.includes(k))) {
@@ -617,25 +626,33 @@ function resolveNavigatePath(rawPath) {
   if (path.startsWith('/journal/')) return path
 
   const m = path.match(/^\/courses\/(.+)$/i)
-  if (!m) return null
+  let slug = ''
+  if (m) {
+    slug = decodeURIComponent(m[1]).toLowerCase().trim()
+    // If it looks like a direct course path, just trust the AI and return it!
+    // This prevents caching issues where the frontend has an old course list.
+    if (slug) return `/courses/${slug}`
+  } else {
+    slug = decodeURIComponent(path.replace(/^\//, '')).toLowerCase().trim()
+  }
 
-  const slug = decodeURIComponent(m[1]).toLowerCase().trim()
   const courses = allCourses.value || []
-  if (!courses.length) return null
+  if (!courses.length) return `/courses/${slug}` // Fallback
 
   let found = courses.find(c => c.id?.toLowerCase() === slug)
   if (found) return `/courses/${found.id}`
 
   const keywords = [
-    { id: 'python', keys: ['python', 'питон', 'пайтон'] },
+    { id: 'react-30-days-ru', keys: ['react', 'реакт'] },
+    { id: 'js-30-days-ru', keys: ['javascript', 'js', 'джаваскрипт', '30 days'] },
+    { id: 'python-100-days-ru', keys: ['python', 'питон', 'пайтон'] },
     { id: 'ml', keys: ['ml', 'машинн', 'machine', 'learning'] },
     { id: 'webdev', keys: ['web', 'веб', 'frontend', 'html'] },
     { id: 'sql', keys: ['sql', 'баз данных', 'postgres'] },
   ]
   for (const { id, keys } of keywords) {
     if (keys.some(k => slug.includes(k))) {
-      found = courses.find(c => c.id === id)
-      if (found) return `/courses/${found.id}`
+      return `/courses/${id}`
     }
   }
 
@@ -644,8 +661,65 @@ function resolveNavigatePath(rawPath) {
     return t.includes(slug) || slug.includes((c.id || '').toLowerCase())
   })
   if (found) return `/courses/${found.id}`
+  
+  return `/courses/${slug}`
+}
 
-  return null
+function runOpenLesson(params) {
+  const cid = params.course_id
+  const idx = params.lesson_number
+  const highlight = String(params?.highlight_text || '').trim()
+  
+  if (!cid || !idx) {
+    return {
+      result: 'Ошибка: Не передан course_id или lesson_number',
+      responseType: 'tool-response',
+      agentReaction: AgentReaction.SPEAKS,
+    }
+  }
+
+  if (highlight) {
+    window.pendingHighlightText = highlight
+  }
+
+  const target = { path: `/courses/${cid}`, query: { lesson_idx: idx } }
+  router.push(target)
+  
+  return {
+    result: `Переход на урок ${idx} выполнен. Урок уже открыт на экране. Не комментируй смену экрана и ничего не говори об этом.`,
+    responseType: 'tool-response',
+    agentReaction: AgentReaction.LISTENS,
+  }
+}
+
+const showCourseSelectionModal = ref(false)
+const courseSelectionList = ref([])
+
+function runShowCourseSelection(params) {
+  const query = String(params?.query || '').toLowerCase().trim()
+  if (!query) {
+    return 'Ошибка: запрос пуст.'
+  }
+  
+  const courses = allCourses.value || []
+  let matches = courses.filter(c => 
+    (c.title || '').toLowerCase().includes(query) || 
+    (c.id || '').toLowerCase().includes(query) ||
+    (c.description || '').toLowerCase().includes(query)
+  )
+  
+  if (matches.length === 0) {
+    matches = courses // Fallback to all courses if no exact match
+  }
+  
+  courseSelectionList.value = matches
+  showCourseSelectionModal.value = true
+  
+  return 'Окно выбора курса открыто на экране. Пользователь сейчас сделает выбор.'
+}
+
+function navigateToCourse(courseId) {
+  router.push(`/courses/${courseId}`)
 }
 
 function tryVoiceNavigate(rawPath) {
@@ -807,7 +881,7 @@ async function runVoiceHomeworkReview() {
     return (
       `Работа ученика ${hw.assignment.student} уже оценена${g != null ? ` на ${g} из 5` : ''}. ` +
       `Повторную ИИ-проверку не запускаю — оценка и отзыв уже на экране. ` +
-      `Чтобы пересчитать отзыв ИИ, нажмите на странице кнопку «Проверить с ИИ (Кортана)».`
+      `Чтобы пересчитать отзыв ИИ, нажмите на странице кнопку «Проверить с ИИ (Голосовой помощник)».`
     )
   }
   if (status !== 'submitted') {
@@ -1087,7 +1161,7 @@ function resetVoiceIdleTimer() {
   
   voiceIdleTimer = setTimeout(() => {
     if (!voiceMode.value || voiceState.value !== 'LISTENING') return
-    voiceError.value = 'Звонок завершён из‑за тишины. Нажмите 🎤, чтобы снова поговорить с Кортаной.'
+    voiceError.value = 'Звонок завершён из‑за тишины. Нажмите 🎤, чтобы снова поговорить с ИИ Ассистентом.'
     stopVoiceMode({ preserveError: true })
   }, 120_000) // 2 minutes
 }
@@ -1159,23 +1233,14 @@ async function startUltravoxSession() {
       return buildVoiceContextMessage()
     })
     uvSession.registerToolImplementation('navigatePage', (params) => runVoiceNavigate(params))
+    uvSession.registerToolImplementation('openLesson', (params) => runOpenLesson(params))
     uvSession.registerToolImplementation('queryKnowledgeBase', (params) => runVoiceRagQuery(params))
     uvSession.registerToolImplementation('reviewHomework', () => runVoiceHomeworkReview())
     uvSession.registerToolImplementation('reviewAllHomeworks', () => runVoiceMassHomeworkReview())
     uvSession.registerToolImplementation('getTeacherSummary', () => runTeacherSummary())
     uvSession.registerToolImplementation('getHomeworkReminders', () => runVoiceReminders())
     uvSession.registerToolImplementation('getHomeworkHint', () => runVoiceHomeworkHint())
-    uvSession.registerToolImplementation('getPageContext', async () => {
-      await refreshPageContextFromRoute()
-      return buildVoiceContextMessage()
-    })
-    uvSession.registerToolImplementation('navigatePage', (params) => runVoiceNavigate(params))
-    uvSession.registerToolImplementation('queryKnowledgeBase', (params) => runVoiceRagQuery(params))
-    uvSession.registerToolImplementation('reviewHomework', () => runVoiceHomeworkReview())
-    uvSession.registerToolImplementation('reviewAllHomeworks', () => runVoiceMassHomeworkReview())
-    uvSession.registerToolImplementation('getTeacherSummary', () => runTeacherSummary())
-    uvSession.registerToolImplementation('getHomeworkReminders', () => runVoiceReminders())
-    uvSession.registerToolImplementation('getHomeworkHint', () => runVoiceHomeworkHint())
+    uvSession.registerToolImplementation('showCourseSelection', (params) => runShowCourseSelection(params))
     uvSession.registerToolImplementation('getNotifications', async () => {
       try {
         const notifs = await notificationsApi.get()
@@ -1336,7 +1401,7 @@ function stopVolumeAnalyser() { micVolume.value = 0 }
 // (old volume analyser removed — Ultravox manages microphone directly)
 
 // Для текстового чата (вейк-слова в поле ввода)
-const WAKE_WORDS = ['кортана', 'кортан', 'эдуай', 'edu ai', 'ассистент', 'помоги мне']
+const WAKE_WORDS = ['ассистент', 'ассистент', 'эдуай', 'edu ai', 'ассистент', 'помоги мне']
 
 function stripWakePrefix(text) {
   let t = (text || '').trim()
@@ -1443,7 +1508,7 @@ let voiceSilenceTimer = null
 let lastVoiceCommitted = ''
 const VOICE_SILENCE_MS = 1200
 
-const WAKE_WORDS = ['кортана', 'кортан', 'эдуай', 'edu ai', 'ассистент', 'помоги мне']
+const WAKE_WORDS = ['ассистент', 'ассистент', 'эдуай', 'edu ai', 'ассистент', 'помоги мне']
 
 // Текущая сессия распознавания: подтвержденный текст (финальные isFinal результаты)
 let committedTranscript = ''
@@ -1461,7 +1526,7 @@ function stripWakePrefix(text) {
       if (!lower.startsWith(w)) continue
       const rest = t.slice(w.length)
       const next = rest[0]
-      // не отрезать «ассистент» из «ассистентский», «кортан» из «кортанка»
+      // не отрезать «ассистент» из «ассистентский», «ассистент» из «ассистентка»
       if (next && /[A-Za-zА-Яа-яЁё]/.test(next)) continue
       t = rest.replace(/^[\s,.;:!?\-—]+/u, '').trim()
       lower = t.toLowerCase()
@@ -2241,6 +2306,10 @@ const quickSuggestions = computed(() => {
 function sendSuggestion(text) { message.value = text; sendStream() }
 
 function executeAction(evt) {
+  if (evt.action === 'show_courses') {
+    runShowCourseSelection({ query: evt.query })
+    return
+  }
   if (evt.action !== 'navigate' || evt.path === undefined || evt.path === null) return
   const path = resolveNavigatePath(evt.path)
   if (!path) {
@@ -2452,7 +2521,7 @@ function onOrbPointerUp(e) {
         v-model.number="voiceVolumePct"
         @input="applyVoiceVolume"
         @change="applyVoiceVolume"
-        title="Громкость Кортаны"
+        title="Громкость ИИ Ассистента"
       />
       <button type="button" class="voice-dock-btn" @click="isOpen = true" title="Открыть чат">💬</button>
       <button type="button" class="voice-dock-btn voice-dock-end" @click="stopVoiceMode" title="Завершить">✕</button>
@@ -2521,7 +2590,7 @@ function onOrbPointerUp(e) {
         <span v-if="voiceMode" class="island-status-text">
           {{ voiceStatusText }}
         </span>
-        <span v-if="!voiceMode" class="island-label">Кортана</span>
+        <span v-if="!voiceMode" class="island-label">Голосовой помощник</span>
       </div>
 
       <transition name="island-expand">
@@ -2532,7 +2601,7 @@ function onOrbPointerUp(e) {
             <span class="transcript-text">{{ voiceTranscript || 'Слушаю…' }}</span>
           </div>
           <div class="transcript-content bot" v-else-if="voiceAssistantText">
-            <span class="bot-label">Кортана</span>
+            <span class="bot-label">Голосовой помощник</span>
             <span class="transcript-text" v-html="renderMarkdown(voiceAssistantText)"></span>
           </div>
           <div class="transcript-content muted" v-else>
@@ -2543,10 +2612,33 @@ function onOrbPointerUp(e) {
       </div>
       </div>
     </div>
+    <!-- Course Selection Modal -->
+    <transition name="fade">
+      <div v-if="showCourseSelectionModal" class="course-selection-overlay" @click.self="showCourseSelectionModal = false">
+        <div class="course-selection-modal glass-panel">
+          <h3>Выберите курс</h3>
+          <p class="modal-subtitle">По вашему запросу найдено несколько вариантов:</p>
+          <div class="course-list">
+            <button
+              v-for="c in courseSelectionList"
+              :key="c.id"
+              class="course-btn glass-btn"
+              @click="showCourseSelectionModal = false; navigateToCourse(c.id)"
+            >
+              <span class="course-icon">{{ c.icon || '📚' }}</span>
+              <div class="course-info">
+                <div class="course-title">{{ c.title }}</div>
+                <div class="course-desc" v-if="c.description">{{ c.description.slice(0, 50) }}...</div>
+              </div>
+            </button>
+          </div>
+          <button class="close-modal-btn glass-btn" @click="showCourseSelectionModal = false">Отмена</button>
+        </div>
+      </div>
+    </transition>
 
   </div>
 </template>
-
 <style scoped>
 /* ─── Chat FAB (Floating Action Button) ──────────────────── */
 .chat-fab {
@@ -2605,6 +2697,122 @@ function onOrbPointerUp(e) {
   box-shadow: 0 24px 48px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.05) inset;
   height: 550px;
   max-height: calc(100vh - 120px);
+}
+
+/* ─── Course Selection Modal ──────────────────────── */
+.course-selection-overlay {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.course-selection-modal {
+  width: 400px;
+  max-width: 90vw;
+  background: rgba(30, 30, 36, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 24px;
+  padding: 24px;
+  box-shadow: 0 32px 64px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.05) inset;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  font-family: 'Inter', sans-serif;
+  color: white;
+}
+
+.course-selection-modal h3 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.course-selection-modal .modal-subtitle {
+  margin: 0;
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.6);
+  margin-bottom: 8px;
+}
+
+.course-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+
+.course-btn {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 16px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 16px;
+  cursor: pointer;
+  transition: background 0.2s, transform 0.1s;
+  text-align: left;
+  color: white;
+}
+
+.course-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  transform: translateY(-2px);
+}
+
+.course-btn:active {
+  transform: translateY(0);
+}
+
+.course-icon {
+  font-size: 24px;
+}
+
+.course-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.course-title {
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.course-desc {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.5);
+  line-height: 1.3;
+}
+
+.close-modal-btn {
+  margin-top: 8px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.08);
+  border: none;
+  border-radius: 16px;
+  color: white;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.close-modal-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.fade-enter-active, .fade-leave-active {
+  transition: opacity 0.3s ease;
+}
+.fade-enter-from, .fade-leave-to {
+  opacity: 0;
 }
 
 .panel-fade-enter-active, .panel-fade-leave-active {

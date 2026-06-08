@@ -1,0 +1,921 @@
+<script setup>
+import { ref, nextTick, computed, watch, onMounted, onUnmounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+
+const route = useRoute()
+const router = useRouter()
+
+// ─── Page & Course Context ────────────────────────────────────────────────
+const courseId   = ref('default')
+const courseName = ref('EduAI')
+const courseIcon = ref('🤖')
+const currentPage = ref('home')
+const allCourses  = ref([])
+
+async function loadAllCourses() {
+  try {
+    const res = await fetch('/api/courses')
+    if (res.ok) allCourses.value = await res.json()
+  } catch (e) {}
+}
+
+const pageContext = computed(() => ({
+  current_page: currentPage.value,
+  current_course_id:   courseId.value !== 'default' ? courseId.value : null,
+  current_course_name: courseId.value !== 'default' ? courseName.value : null,
+  available_courses: allCourses.value.map(c => ({
+    id: c.id, title: c.title, icon: c.icon || '', description: c.description || ''
+  }))
+}))
+
+watch(() => [route.path, route.params.id], async ([newPath, newId]) => {
+  if (newPath.startsWith('/homeworks/') && newId) {
+    currentPage.value = 'homework'
+    courseId.value    = window.currentHomeworkContext?.courseId || 'default'
+    courseName.value  = window.currentHomeworkContext?.title || 'Домашнее задание'
+    courseIcon.value  = '📝'
+    return
+  }
+  
+  if (newPath.startsWith('/courses/') && newId) {
+    currentPage.value = 'course'
+    try {
+      const res = await fetch(`/api/courses/${newId}`)
+      if (res.ok) {
+        const data = await res.json()
+        courseId.value   = data.id
+        courseName.value = data.title
+        courseIcon.value = data.icon
+      }
+    } catch (e) {}
+  } else {
+    currentPage.value = 'home'
+    courseId.value    = 'default'
+    courseName.value  = 'EduAI'
+    courseIcon.value  = '🤖'
+  }
+}, { immediate: true })
+
+// ─── Text Chat State ───────────────────────────────────────────────────────
+const isOpen    = ref(false)
+const history   = ref([])
+const message   = ref('')
+const isBusy    = ref(false)
+const errorText = ref('')
+const threadEl  = ref(null)
+
+// UX #7: переключатель TTS
+const ttsEnabled = ref(true)
+
+const canSend = computed(() => message.value.trim().length > 0 && !isBusy.value)
+
+function togglePanel() {
+  if (voiceMode.value) { stopVoiceMode(); return }
+  isOpen.value = !isOpen.value
+}
+function closePanel() { isOpen.value = false }
+
+async function scrollBottom() {
+  await nextTick()
+  if (threadEl.value) threadEl.value.scrollTop = threadEl.value.scrollHeight
+}
+
+// ─── Voice Mode State ──────────────────────────────────────────────────────
+const voiceMode          = ref(false)
+const voiceState         = ref('IDLE')
+const voiceTranscript    = ref('')
+const voiceAssistantText = ref('')
+const isHearingSpeech    = ref(false)
+const voiceError         = ref('')        // UX #4
+const micVolume          = ref(0)         // UX #1: 0–100
+const lastAssistantText  = ref('')        // UX #5
+const wakeFlash          = ref(false)     // анимация при обнаружении wake word
+/** Web Speech API есть только в Chromium (Chrome, Edge, Opera). Firefox/Safari — часто нет. */
+const speechRecognitionSupported = ref(true)
+/** MediaRecorder fallback для Firefox/Safari */
+let mediaRecorder = null
+let mediaChunks   = []
+let mediaStream   = null
+let usingMediaRecorderFallback = false
+
+// Siri-режим
+const waitingForSpeech = ref(false)
+let waitingTimer = null
+const WAITING_TIMEOUT_MS = 12000
+
+let audioQueue     = []
+let isAudioPlaying = false
+let streamDone     = false
+let currentAudio   = null
+let recognitionHeartbeat = null  // таймер перезапуска распознавания
+
+// UX #1: AudioContext для визуализации громкости микрофона
+let audioCtx    = null
+let analyser    = null
+let micStream   = null
+let volumeRafId = null
+
+let volumeAnalyserRunning = false
+
+function startVolumeAnalyser() {
+  if (audioCtx || volumeAnalyserRunning) return
+  volumeAnalyserRunning = true
+  navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+    .then(stream => {
+      if (!volumeAnalyserRunning) {
+        // Остановили до начала запроса
+        stream.getTracks().forEach(t => t.stop())
+        return
+      }
+      micStream = stream
+      audioCtx  = new (window.AudioContext || window.webkitAudioContext)()
+      analyser  = audioCtx.createAnalyser()
+      analyser.fftSize = 256
+      audioCtx.createMediaStreamSource(stream).connect(analyser)
+      const data = new Uint8Array(analyser.frequencyBinCount)
+      function tick() {
+        // КРИТИЧНО: сразу проверяем флаг — если стоппировали, выходим
+        if (!volumeAnalyserRunning || !analyser) { volumeRafId = null; return }
+        analyser.getByteFrequencyData(data)
+        const avg = data.reduce((s, v) => s + v, 0) / data.length
+        micVolume.value = Math.min(100, Math.round((avg / 128) * 200))
+        volumeRafId = requestAnimationFrame(tick)
+      }
+      tick()
+    })
+    .catch(err => {
+      volumeAnalyserRunning = false
+      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+        voiceError.value = 'Нет доступа к микрофону. Разрешите доступ в настройках браузера и обновите страницу.'
+      } else if (err.name === 'NotFoundError') {
+        voiceError.value = 'Микрофон не найден. Подключите микрофон и попробуйте снова.'
+      } else {
+        voiceError.value = `Ошибка микрофона: ${err.message}`
+      }
+    })
+}
+
+function stopVolumeAnalyser() {
+  volumeAnalyserRunning = false  // Останавливает tick() цикл через флаг
+  if (volumeRafId) { cancelAnimationFrame(volumeRafId); volumeRafId = null }
+  if (micStream)   { micStream.getTracks().forEach(t => t.stop()); micStream = null }
+  if (audioCtx)    { audioCtx.close().catch(() => {}); audioCtx = null }
+  analyser = null
+  micVolume.value = 0
+}
+
+// ─── MediaRecorder STT fallback (Firefox/Safari) ───────────────────────────
+function stopMediaRecorder() {
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    try { mediaRecorder.stop() } catch (e) {}
+  }
+  if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null }
+  mediaRecorder = null
+  mediaChunks = []
+}
+
+async function startMediaRecorderListening() {
+  stopMediaRecorder()
+  try {
+    mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+  } catch (err) {
+    voiceError.value = 'Нет доступа к микрофону.'
+    return
+  }
+
+  const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+    ? 'audio/webm;codecs=opus'
+    : MediaRecorder.isTypeSupported('audio/ogg;codecs=opus')
+      ? 'audio/ogg;codecs=opus'
+      : 'audio/webm'
+
+  mediaRecorder = new MediaRecorder(mediaStream, { mimeType })
+  mediaChunks = []
+
+  mediaRecorder.ondataavailable = e => { if (e.data.size > 0) mediaChunks.push(e.data) }
+
+  mediaRecorder.onstop = async () => {
+    if (!voiceModeInternal || voiceState.value !== 'LISTENING') return
+    const blob = new Blob(mediaChunks, { type: mimeType })
+    mediaChunks = []
+    if (blob.size < 1000) { startMediaRecorderListening(); return }
+
+    voiceState.value = 'THINKING'
+    try {
+      const form = new FormData()
+      form.append('audio', blob, 'recording.' + mimeType.split('/')[1].split(';')[0])
+      const res = await fetch('/api/stt', { method: 'POST', body: form })
+      if (!res.ok) throw new Error('STT failed')
+      const data = await res.json()
+      const t = (data.transcript || '').trim()
+      if (t && t.length > 1) {
+        voiceTranscript.value = t
+        lastVoiceCommitted = t
+        handleUserVoice(t)
+      } else {
+        voiceState.value = 'LISTENING'
+        startMediaRecorderListening()
+      }
+    } catch (e) {
+      voiceState.value = 'LISTENING'
+      startMediaRecorderListening()
+    }
+  }
+
+  // Записываем сегменты по 2 секунды тишины (timeslice не используем — пишем цельно)
+  mediaRecorder.start()
+  voiceState.value = 'LISTENING'
+
+  // Автостоп через 8 секунд макс — затем перезапуск
+  setTimeout(() => {
+    if (mediaRecorder && mediaRecorder.state === 'recording' && voiceModeInternal && voiceState.value === 'LISTENING') {
+      mediaRecorder.stop()
+    }
+  }, 8000)
+}
+
+// ─── Speech Recognition ────────────────────────────────────────────────────
+let recognition       = null
+let recognitionActive = false
+let shouldRestart     = false
+let voiceModeInternal = false
+let wakeWordTriggered = false
+/** После паузы в речи отправляем текст (иначе при continuous=true финалы от Chrome часто не приходят). */
+let voiceSilenceTimer = null
+let lastVoiceCommitted = ''
+const VOICE_SILENCE_MS = 1200
+
+const WAKE_WORDS = ['кортана', 'кортан', 'эдуай', 'edu ai', 'ассистент', 'помоги мне']
+
+// Текущая сессия распознавания: подтвержденный текст (финальные isFinal результаты)
+let committedTranscript = ''
+
+/** Убирает кодовые слова вызова в начале фразы (не имя пользователя). */
+function stripWakePrefix(text) {
+  let t = (text || '').trim()
+  if (!t) return t
+  const sorted = [...WAKE_WORDS].sort((a, b) => b.length - a.length)
+  let lower = t.toLowerCase()
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const w of sorted) {
+      if (!lower.startsWith(w)) continue
+      const rest = t.slice(w.length)
+      const next = rest[0]
+      // не отрезать «ассистент» из «ассистентский», «кортан» из «кортанка»
+      if (next && /[A-Za-zА-Яа-яЁё]/.test(next)) continue
+      t = rest.replace(/^[\s,.;:!?\-—]+/u, '').trim()
+      lower = t.toLowerCase()
+      changed = true
+      break
+    }
+  }
+  return t.length ? t : ''
+}
+
+function initRecognition() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition
+  if (!SR) {
+    speechRecognitionSupported.value = false
+    usingMediaRecorderFallback = true
+    return
+  }
+
+  recognition = new SR()
+  recognition.lang            = 'ru-RU'
+  recognition.interimResults  = true
+  recognition.continuous      = true
+  recognition.maxAlternatives = 1
+
+  recognition.onstart = () => {
+    recognitionActive = true
+    isHearingSpeech.value = false
+  }
+
+  recognition.onspeechstart = () => {
+    isHearingSpeech.value = true
+    // Как только человек начал говорить — сбрасываем таймер ожидания
+    if (waitingForSpeech.value) clearWaitingMode()
+    // UX #2: barge-in — прерываем ответ если заговорили
+    if (voiceModeInternal && voiceState.value === 'SPEAKING') interruptSpeaking()
+  }
+
+  recognition.onspeechend = () => {
+    isHearingSpeech.value = false
+    // После окончания речи — запускаем короткий таймер ожидания финального результата
+    if (voiceModeInternal && voiceState.value === 'LISTENING') {
+      clearSilenceCommit()
+      voiceSilenceTimer = setTimeout(() => {
+        voiceSilenceTimer = null
+        if (!voiceModeInternal || voiceState.value !== 'LISTENING') return
+        const txt = voiceTranscript.value.trim()
+        if (txt && txt.length > 1 && txt !== lastVoiceCommitted) {
+          lastVoiceCommitted = txt
+          handleUserVoice(txt)
+        }
+      }, 600)
+    }
+  }
+
+  recognition.onresult = (e) => {
+    let finalText = '', interimText = ''
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const t = e.results[i][0].transcript
+      if (e.results[i].isFinal) finalText += t
+      else interimText += t
+    }
+
+    if (!voiceModeInternal) {
+      // Режим ожидания вейк-слова
+      const line = (finalText || interimText).trim()
+      const lower = line.toLowerCase()
+      const wakeWord = WAKE_WORDS.find(w => lower.includes(w))
+      if (wakeWord) {
+        if (wakeWordTriggered) return
+        wakeWordTriggered = true
+        setTimeout(() => { wakeWordTriggered = false }, 3000)
+        wakeFlash.value = true
+        setTimeout(() => { wakeFlash.value = false }, 800)
+        const idx = lower.indexOf(wakeWord)
+        const afterWake = (idx >= 0 ? line.slice(idx + wakeWord.length) : line)
+          .replace(/^[\s,.;:!?\-—]+/u, '').trim()
+        startVoiceMode(afterWake || '')
+      }
+    } else {
+      if (voiceState.value === 'LISTENING') {
+        clearWaitingMode()
+
+        if (finalText) {
+          // isFinal — добавляем в подтверждённый (не заменяем!)
+          committedTranscript = (committedTranscript + ' ' + finalText.trim()).trim()
+          voiceTranscript.value = committedTranscript
+          clearSilenceCommit()
+          voiceSilenceTimer = setTimeout(() => {
+            voiceSilenceTimer = null
+            if (!voiceModeInternal || voiceState.value !== 'LISTENING') return
+            const txt = committedTranscript.trim()
+            if (txt && txt.length > 1 && txt !== lastVoiceCommitted) {
+              lastVoiceCommitted = txt
+              handleUserVoice(txt)
+            }
+          }, 500)
+        } else {
+          // interim — НЕ аккумулируем! Показываем: [финальное] + [текущее interim]
+          voiceTranscript.value = (committedTranscript + ' ' + interimText).trim()
+          scheduleSilenceCommit()
+        }
+      }
+    }
+  }
+
+
+  recognition.onerror = (e) => {
+    recognitionActive = false
+    if (e.error === 'no-speech') {
+      // В режиме ожидания — перезапускаем, не закрываем
+      if (waitingForSpeech.value && voiceModeInternal) {
+        setTimeout(() => startRecognitionIfNeeded(), 150); return
+      }
+      if (voiceModeInternal && voiceState.value === 'LISTENING') {
+        setTimeout(() => startRecognitionIfNeeded(), 150)
+      }
+    } else if (e.error === 'aborted') {
+      return
+    } else if (e.error === 'network') {
+      // Chromium: облачный STT иногда кратко рвётся — не показываем вспышку «network», тихо перезапуск
+      if (waitingForSpeech.value && voiceModeInternal) {
+        setTimeout(() => startRecognitionIfNeeded(), 350)
+        return
+      }
+      if (voiceModeInternal && voiceState.value === 'LISTENING') {
+        setTimeout(() => startRecognitionIfNeeded(), 350)
+      } else if (!voiceModeInternal) {
+        setTimeout(() => startRecognitionIfNeeded(), 350)
+      }
+    } else if (e.error === 'not-allowed') {
+      // UX #4
+      voiceError.value = 'Доступ к микрофону запрещён. Разрешите доступ в настройках браузера.'
+      if (voiceModeInternal) stopVoiceMode()
+    } else {
+      if (voiceModeInternal) voiceError.value = `Ошибка распознавания: ${e.error}`
+    }
+  }
+
+  recognition.onend = () => {
+    recognitionActive = false
+    isHearingSpeech.value = false
+    // Защита от бесконечного цикла перезапуска
+    if (!shouldRestart) return
+    if (voiceModeInternal && (voiceState.value === 'THINKING' || voiceState.value === 'SPEAKING')) return
+    setTimeout(() => startRecognitionIfNeeded(), 300)
+  }
+}
+
+function startRecognitionIfNeeded() {
+  if (recognitionActive || !recognition) return
+  if (isOpen.value && !voiceModeInternal) return
+  if (voiceModeInternal && (voiceState.value === 'THINKING' || voiceState.value === 'SPEAKING')) return
+  try {
+    shouldRestart = true
+    recognition.start()
+  } catch (e) {
+    // InvalidStateError = уже запущен
+    if (e.name !== 'InvalidStateError') console.warn('[recognition.start]', e.name)
+  }
+}
+
+function stopRecognition() {
+  shouldRestart = false
+  if (recognition) try { recognition.abort() } catch (e) {}
+}
+
+function clearSilenceCommit() {
+  if (voiceSilenceTimer) {
+    clearTimeout(voiceSilenceTimer)
+    voiceSilenceTimer = null
+  }
+}
+
+function scheduleSilenceCommit() {
+  if (!voiceModeInternal || voiceState.value !== 'LISTENING') return
+  clearSilenceCommit()
+  voiceSilenceTimer = setTimeout(() => {
+    voiceSilenceTimer = null
+    if (!voiceModeInternal || voiceState.value !== 'LISTENING') return
+    // Не проверяем isHearingSpeech — доверяем таймауту
+    const t = voiceTranscript.value.trim()
+    if (t.length < 2) return
+    if (t === lastVoiceCommitted) return
+    lastVoiceCommitted = t
+    handleUserVoice(t)
+  }, 1500)
+}
+
+function commitVoiceManually() {
+  const t = voiceTranscript.value.trim()
+  if (!t || voiceState.value !== 'LISTENING') return
+  clearSilenceCommit()
+  lastVoiceCommitted = t
+  clearWaitingMode()
+  handleUserVoice(t)
+}
+
+function interruptSpeaking() {
+  stopAudioQueue()
+  voiceState.value = 'LISTENING'
+  voiceAssistantText.value = ''
+  stopRecognition()
+  setTimeout(() => startRecognitionIfNeeded(), 100)
+}
+
+onMounted(() => {
+  loadAllCourses()
+  initRecognition()
+  // Фоновое прослушивание микрофона отключено для предотвращения сбоев драйвера AMD (TDR).
+  // Функция активации голосом без клика отключена.
+  shouldRestart = false
+  window.addEventListener('beforeunload', forceCleanup)
+})
+
+function forceCleanup() {
+  clearWaitingMode()
+  clearSilenceCommit()
+  stopRecognition()
+  stopAudioQueue()
+  stopVolumeAnalyser()
+  stopMediaRecorder()
+  if (recognitionHeartbeat) { clearInterval(recognitionHeartbeat); recognitionHeartbeat = null }
+}
+
+onUnmounted(() => {
+  forceCleanup()
+  window.removeEventListener('beforeunload', forceCleanup)
+})
+
+// ─── Siri waiting mode ─────────────────────────────────────────────────────
+function enterWaitingMode() {
+  committedTranscript = ''  // Сбрасываем накопленный текст при новом сеансе
+  waitingForSpeech.value = true
+  voiceState.value = 'LISTENING'
+  voiceTranscript.value = ''
+  startRecognitionIfNeeded()
+  clearTimeout(waitingTimer)
+  waitingTimer = setTimeout(() => {
+    if (waitingForSpeech.value && voiceModeInternal) stopVoiceMode()
+  }, WAITING_TIMEOUT_MS)
+}
+
+function clearWaitingMode() {
+  waitingForSpeech.value = false
+  clearTimeout(waitingTimer)
+  waitingTimer = null
+}
+
+// ─── Voice Mode ────────────────────────────────────────────────────────────
+function startVoiceMode(initialPrompt = '') {
+  isOpen.value = false
+  voiceMode.value      = true
+  voiceModeInternal    = true
+  voiceError.value     = ''
+  voiceTranscript.value    = ''
+  voiceAssistantText.value = ''
+  lastAssistantText.value  = ''
+  lastVoiceCommitted = ''
+  clearSilenceCommit()
+
+  startVolumeAnalyser()
+
+  if (initialPrompt.trim()) {
+    clearWaitingMode()
+    voiceTranscript.value = initialPrompt
+    // Небольшая задержка — даём браузеру время зарегистрировать пользовательский жест для TTS
+    voiceState.value = 'THINKING'
+    setTimeout(() => handleUserVoice(initialPrompt.trim()), 50)
+  } else if (usingMediaRecorderFallback) {
+    // Firefox/Safari — Web Speech API нет, используем MediaRecorder + Gemini STT
+    voiceState.value = 'LISTENING'
+    startMediaRecorderListening()
+  } else {
+    enterWaitingMode()
+  }
+}
+
+function stopVoiceMode() {
+  clearWaitingMode()
+  clearSilenceCommit()
+  committedTranscript = ''  // Сбрасываем накопленный текст при выходе
+  voiceMode.value      = false
+  voiceModeInternal    = false
+  voiceState.value     = 'IDLE'
+  voiceError.value     = ''
+  stopAudioQueue()
+  stopRecognition()
+  stopVolumeAnalyser()
+  stopMediaRecorder()
+  // НЕ открываем текстовый чат — гид остаётся в фоне, не мешаем курсу
+  voiceTranscript.value    = ''
+  voiceAssistantText.value = ''
+  shouldRestart = false
+}
+
+// UX #2: остановить TTS и вернуться к слушанию
+function stopSpeakingAndListen() {
+  stopAudioQueue()
+  voiceState.value = 'LISTENING'
+  voiceAssistantText.value = ''
+  setTimeout(() => startRecognitionIfNeeded(), 400)
+}
+
+// UX #5: повторить последний ответ
+async function repeatLastAnswer() {
+  if (!lastAssistantText.value || !ttsEnabled.value) return
+  try {
+    const res = await fetch('/api/tts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: lastAssistantText.value, voice: true }),
+    })
+    if (res.status === 204 || !res.ok) return
+    const blob = await res.blob()
+    const url  = URL.createObjectURL(blob)
+    const audio = new Audio(url)
+    voiceState.value = 'SPEAKING'
+    audio.onended = () => {
+      URL.revokeObjectURL(url)
+      voiceState.value = 'LISTENING'
+      startRecognitionIfNeeded()
+    }
+    audio.play()
+  } catch (e) { console.error('[Repeat]', e) }
+}
+
+async function handleUserVoice(text) {
+  const raw = text.trim()
+  if (!raw) { voiceState.value = 'LISTENING'; return }
+  const cleaned = stripWakePrefix(raw)
+  text = cleaned.length ? cleaned : 'Привет!'
+  if (voiceState.value === 'THINKING' || voiceState.value === 'SPEAKING') return
+
+  clearSilenceCommit()
+
+  // UX #8: останавливаем recognition — не поймаем собственный голос ИИ
+  stopRecognition()
+
+  voiceState.value         = 'THINKING'
+  voiceTranscript.value    = text
+  voiceAssistantText.value = ''
+  voiceError.value         = ''
+
+  history.value.push({ role: 'user',      content: text, sources: [] })
+  history.value.push({ role: 'assistant', content: '',   sources: [] })
+  const assistantIdx = history.value.length - 1
+
+  const apiHistory = history.value.slice(0, -2).map(({ role, content }) => ({ role, content }))
+  audioQueue = []; isAudioPlaying = false; streamDone = false
+
+  try {
+    const headers = { 'Content-Type': 'application/json' }
+    const token = localStorage.getItem('token')
+    if (token) headers['Authorization'] = `Bearer ${token}`
+
+    const res = await fetch('/api/chat/voice', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        message: text, history: apiHistory,
+        course_id: courseId.value, course_name: courseName.value,
+        page_context: pageContext.value
+      }),
+    })
+    if (!res.ok) throw new Error(await res.text())
+
+    const reader  = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    while (true) {
+      if (!voiceModeInternal) break
+      const { value, done } = await reader.read()
+      if (done) break
+
+      buffer += decoder.decode(value, { stream: true })
+      const parts = buffer.split('\n\n')
+      buffer = parts.pop() ?? ''
+
+      for (const part of parts) {
+        const line = part.split('\n').map(l => l.trim()).find(l => l.startsWith('data:'))
+        if (!line) continue
+        const jsonText = line.slice('data:'.length).trim()
+        if (!jsonText) continue
+        let evt
+        try { evt = JSON.parse(jsonText) } catch { continue }
+
+        if (evt.type === 'token') {
+          history.value[assistantIdx].content += String(evt.content ?? '')
+          voiceAssistantText.value += String(evt.content ?? '')
+        } else if (evt.type === 'sentence') {
+          // UX #7: воспроизводим только если TTS включён
+          if (evt.audio_b64 && ttsEnabled.value) {
+            audioQueue.push(evt.audio_b64)
+            playNextAudio()
+          }
+        } else if (evt.type === 'action' && evt.action === 'navigate') {
+          executeAction(evt)
+        } else if (evt.type === 'sources') {
+          history.value[assistantIdx].sources = Array.isArray(evt.content) ? evt.content : []
+        } else if (evt.type === 'error') {
+          voiceError.value = String(evt.content ?? 'Ошибка')
+        }
+      }
+    }
+
+    // UX #5: сохраняем полный текст для кнопки «Повторить»
+    lastAssistantText.value = history.value[assistantIdx]?.content ?? ''
+
+    streamDone = true
+    if (!isAudioPlaying && audioQueue.length === 0 && voiceModeInternal) resumeListening()
+
+  } catch (e) {
+    voiceError.value = 'Не удалось получить ответ. Попробуйте ещё раз.'
+    if (voiceModeInternal) resumeListening()
+  }
+}
+
+async function playNextAudio() {
+  if (isAudioPlaying || audioQueue.length === 0 || !voiceModeInternal) return
+  isAudioPlaying = true
+  voiceState.value = 'SPEAKING'
+
+  const b64 = audioQueue.shift()
+  let safetyTimer = null
+
+  function onAudioDone() {
+    clearTimeout(safetyTimer)
+    // UX: исправлена утечка — сохраняем src ДО обнуления currentAudio
+    const urlToRevoke = currentAudio?.src
+    isAudioPlaying = false
+    currentAudio   = null
+    if (urlToRevoke) try { URL.revokeObjectURL(urlToRevoke) } catch (e) {}
+    if (!voiceModeInternal) return
+    if (audioQueue.length > 0) playNextAudio()
+    else if (streamDone) resumeListening()
+  }
+
+  try {
+    const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0))
+    const blob  = new Blob([bytes], { type: 'audio/mpeg' })
+    const url   = URL.createObjectURL(blob)
+    currentAudio = new Audio(url)
+    currentAudio.onended = onAudioDone
+    currentAudio.onerror = onAudioDone
+    currentAudio.onloadedmetadata = () => {
+      const dur = currentAudio?.duration || 10
+      safetyTimer = setTimeout(onAudioDone, (dur + 3) * 1000)
+    }
+    safetyTimer = setTimeout(onAudioDone, 15000)
+    await currentAudio.play()
+  } catch (e) {
+    clearTimeout(safetyTimer)
+    isAudioPlaying = false; currentAudio = null
+    if (audioQueue.length > 0) playNextAudio()
+    else if (streamDone) resumeListening()
+  }
+}
+
+function stopAudioQueue() {
+  audioQueue = []; streamDone = true
+  if (currentAudio) { currentAudio.pause(); currentAudio = null }
+  isAudioPlaying = false
+}
+
+function resumeListening() {
+  if (!voiceModeInternal) return
+  voiceState.value = 'LISTENING'
+  voiceTranscript.value = ''
+  voiceAssistantText.value = ''
+  lastVoiceCommitted = ''
+  committedTranscript = ''  // Сбрасываем для следующей фразы
+  clearSilenceCommit()
+  // Задержка — даём аудио затихнуть
+  setTimeout(() => {
+    if (!voiceModeInternal || voiceState.value !== 'LISTENING') return
+    if (usingMediaRecorderFallback) {
+      startMediaRecorderListening()
+    } else {
+      startRecognitionIfNeeded()
+    }
+  }, 700)
+}
+
+// ─── Text Chat SSE ─────────────────────────────────────────────────────────
+async function sendStream() {
+  if (!canSend.value) return
+  const raw = message.value.trim()
+  message.value   = ''
+  errorText.value = ''
+
+  const stripped = stripWakePrefix(raw)
+  const userText = stripped.length ? stripped : (raw ? 'Привет!' : '')
+
+  history.value.push({ role: 'user',      content: userText, sources: [] })
+  history.value.push({ role: 'assistant', content: '',        sources: [] })
+  const assistantIdx = history.value.length - 1
+
+  isBusy.value = true
+  await scrollBottom()
+
+  const apiHistory = history.value.slice(0, -2).map(({ role, content }) => ({ role, content }))
+
+  try {
+    const headers = { 'Content-Type': 'application/json' }
+    const token = localStorage.getItem('token')
+    if (token) headers['Authorization'] = `Bearer ${token}`
+
+    const res = await fetch('/api/chat/stream', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        message: userText, history: apiHistory,
+        course_id: courseId.value, course_name: courseName.value,
+        page_context: pageContext.value
+      }),
+    })
+    if (!res.ok || !res.body) throw new Error(await res.text())
+
+    const reader  = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    while (true) {
+      const { value, done } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const parts = buffer.split('\n\n')
+      buffer = parts.pop() ?? ''
+
+      for (const part of parts) {
+        const line = part.split('\n').map(l => l.trim()).find(l => l.startsWith('data:'))
+        if (!line) continue
+        const jsonText = line.slice('data:'.length).trim()
+        if (!jsonText) continue
+        let evt
+        try { evt = JSON.parse(jsonText) } catch { continue }
+
+        if (evt.type === 'sources') {
+          history.value[assistantIdx].sources = Array.isArray(evt.content) ? evt.content : []
+        } else if (evt.type === 'token') {
+          history.value[assistantIdx].content += String(evt.content ?? '')
+          await scrollBottom()
+        } else if (evt.type === 'action') {
+          executeAction(evt)
+        } else if (evt.type === 'error') {
+          errorText.value = String(evt.content ?? 'Неизвестная ошибка')
+        }
+      }
+    }
+  } catch (e) {
+    errorText.value = e?.message ?? String(e)
+    if (!history.value[assistantIdx]?.content) history.value.pop()
+  } finally {
+    isBusy.value = false
+  }
+}
+
+// ─── Dynamic Island ─────────────────────────────────────────────────────────
+function onIslandClick() {
+  if (voiceMode.value) {
+    stopVoiceMode()
+  } else {
+    togglePanel()
+  }
+}
+
+function clearHistory() { history.value = []; errorText.value = '' }
+
+const quickSuggestions = computed(() => {
+  if (currentPage.value === 'course')
+    return ['О чём этот курс?', 'Объясни основные понятия', 'Какие есть ещё курсы?']
+  return ['Какие есть курсы?', 'Что ты умеешь?', 'С чего начать обучение?']
+})
+function sendSuggestion(text) { message.value = text; sendStream() }
+
+function executeAction(evt) {
+  if (evt.action === 'navigate' && evt.path) {
+    const delay = voiceModeInternal ? 2000 : 1000
+    setTimeout(() => {
+      if (voiceModeInternal) stopVoiceMode()
+      router.push(evt.path)
+    }, delay)
+  }
+}
+
+// ─── Computed ──────────────────────────────────────────────────────────────
+const voiceStatusText = computed(() => {
+  if (voiceState.value === 'LISTENING') {
+    if (waitingForSpeech.value) return 'Слушаю вас...'
+    if (isHearingSpeech.value)  return 'Слышу вас...'
+    return 'Говорите...'
+  }
+  if (voiceState.value === 'THINKING') return 'Думаю...'
+  if (voiceState.value === 'SPEAKING') return 'Отвечаю...'
+  return 'Ожидание...'
+})
+
+// UX #1: масштаб орба от громкости микрофона
+const orbScale = computed(() => {
+  if (voiceState.value === 'SPEAKING') return 1 + 0.12
+  if (voiceState.value !== 'LISTENING') return 1
+  return 1 + (micVolume.value / 100) * 0.25
+})
+
+// ─── Draggable Orb ─────────────────────────────────────────────────────────
+const orbX = ref(window.innerWidth  - 96)
+const orbY = ref(window.innerHeight - 96)
+const panelsAnchorRef = ref(null)
+const orbWrapRef = ref(null)
+
+let dragActive = false
+let dragOffsetX = 0
+let dragOffsetY = 0
+let dragMoved   = false
+const ORB_SIZE  = 68
+
+function onOrbPointerDown(e) {
+  dragActive  = true
+  dragMoved   = false
+  dragOffsetX = e.clientX - orbX.value
+  dragOffsetY = e.clientY - orbY.value
+  e.currentTarget.setPointerCapture(e.pointerId)
+  e.preventDefault()
+}
+
+function onOrbPointerMove(e) {
+  if (!dragActive) return
+  const nx = e.clientX - dragOffsetX
+  const ny = e.clientY - dragOffsetY
+  if (Math.abs(nx - orbX.value) > 3 || Math.abs(ny - orbY.value) > 3) dragMoved = true
+  
+  // Вычисляем новые границы
+  const finalX = Math.max(0, Math.min(window.innerWidth  - ORB_SIZE, nx))
+  const finalY = Math.max(0, Math.min(window.innerHeight - ORB_SIZE, ny))
+  
+  orbX.value = finalX
+  orbY.value = finalY
+
+  // Прямая мутация DOM для 144Hz без фризов Vue
+  if (orbWrapRef.value) {
+    orbWrapRef.value.style.left = finalX + 'px'
+    orbWrapRef.value.style.top  = finalY + 'px'
+  }
+  if (panelsAnchorRef.value) {
+    panelsAnchorRef.value.style.left = finalX + 'px'
+    panelsAnchorRef.value.style.top  = finalY + 'px'
+  }
+}
+
+function onOrbPointerUp(e) {
+  dragActive = false
+  if (!dragMoved) togglePanel()
+}
+</script>

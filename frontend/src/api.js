@@ -1,14 +1,25 @@
-export function getApiBaseUrl() {
+export function getApiBaseUrl(endpoint = '') {
   const v = import.meta.env.VITE_API_BASE_URL
-  if (v === '/api' || v === '') return '/api'
-  if (typeof v === 'string' && v.startsWith('http')) return v.replace(/\/$/, '')
-  return 'http://127.0.0.1:8000/api'
+  if (v && v !== '/api' && typeof v === 'string' && v.startsWith('http')) {
+    return v.replace(/\/$/, '')
+  }
+  
+  // AI Service endpoints -> port 8000
+  if (endpoint.startsWith('/chat') || 
+      endpoint.startsWith('/analytics') || 
+      endpoint.startsWith('/adaptive') || 
+      endpoint.startsWith('/ultravox')) {
+    return 'http://127.0.0.1:8000/api'
+  }
+  
+  // Platform Service endpoints (auth, homework, courses, etc) -> port 8001
+  return 'http://127.0.0.1:8001/api'
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000
 
 export async function apiFetch(endpoint, options = {}) {
-  const baseUrl = getApiBaseUrl()
+  const baseUrl = getApiBaseUrl(endpoint)
   const url = endpoint.startsWith('http') ? endpoint : `${baseUrl}${endpoint}`
 
   const headers = { ...options.headers }

@@ -53,6 +53,7 @@ onMounted(async () => {
           </nav>
 
           <div class="topbar-actions" v-if="user">
+            <router-link to="/admin" class="glass-link" v-if="user.role === 'admin'">Панель управления</router-link>
             <router-link to="/journal" class="glass-link" v-if="user.role === 'teacher'">Журнал</router-link>
             <router-link to="/analytics" class="glass-link" v-if="user.role === 'teacher'">Аналитика</router-link>
             <router-link to="/homeworks" class="glass-link">Задания</router-link>
@@ -133,7 +134,7 @@ onMounted(async () => {
             <div class="demo-messages">
               <div class="demo-msg bot">
                 <div class="msg-avatar">AI</div>
-                <div class="msg-text">Привет! Я помогаю по курсу <strong>Python для начинающих</strong>. Задайте вопрос голосом или текстом.</div>
+                <div class="msg-text">Привет! Я персональный ИИ-ассистент платформы <strong>EduAI</strong>. Задайте вопрос голосом или текстом.</div>
               </div>
               <div class="demo-msg user">
                 <div class="msg-text">Что такое f-строки в Python?</div>
@@ -208,7 +209,7 @@ onMounted(async () => {
               </svg>
             </div>
             <h3>Задайте вопрос</h3>
-            <p>Нажмите кнопку микрофона в плавающем ассистенте (Кортана) или введите вопрос текстом. Голосовой ввод работает через Web Speech API прямо в браузере — никаких установок не нужно.</p>
+            <p>Нажмите кнопку микрофона в плавающем ассистенте (Голосовой помощник) или введите вопрос текстом. Голосовой ввод работает через Web Speech API прямо в браузере — никаких установок не нужно.</p>
             <div class="step-tags">
               <span>Голос</span><span>Текст</span><span>Браузер</span>
             </div>

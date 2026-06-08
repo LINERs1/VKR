@@ -129,19 +129,7 @@
               <textarea v-model="submitData.student_text" rows="6" class="hd-textarea" placeholder="Ответы на вопросы из задания..."></textarea>
             </div>
 
-            <div v-if="hintText" class="hd-hint">
-              <div class="hd-hint-icon">💡</div>
-              <div>
-                <div class="hd-hint-title">Подсказка от Кортаны</div>
-                <p class="hd-hint-text">{{ hintText }}</p>
-              </div>
-            </div>
-
             <div class="hd-actions">
-              <button class="hd-btn secondary" @click="handleHint" :disabled="hintLoading || submitting">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-                {{ hintLoading ? 'Думаю…' : 'Подсказка' }}
-              </button>
               <button class="hd-btn primary" @click="handleSubmit" :disabled="submitting || hintLoading">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
                 {{ submitting ? 'Отправляем…' : 'Отправить на проверку' }}

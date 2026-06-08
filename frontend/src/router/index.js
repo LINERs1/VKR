@@ -17,6 +17,7 @@ const router = createRouter({
     { path: '/journal', component: () => import('../views/JournalView.vue'), meta: { requiresAuth: true, teacherOnly: true } },
     { path: '/analytics', component: () => import('../views/AnalyticsView.vue'), meta: { requiresAuth: true, teacherOnly: true } },
     { path: '/students/:id', component: () => import('../views/StudentProfileView.vue'), meta: { requiresAuth: true, teacherOnly: true } },
+    { path: '/admin', component: () => import('../views/AdminDashboardView.vue'), meta: { requiresAuth: true, adminOrTeacherOnly: true } },
     { path: '/login', component: LoginView, meta: { requiresGuest: true } },
   ],
   scrollBehavior(to) {
@@ -38,6 +39,11 @@ router.beforeEach(async (to, from) => {
   if (to.meta.teacherOnly && isAuth) {
     const user = await fetchUser()
     if (user?.role !== 'teacher') return '/homeworks'
+  }
+
+  if (to.meta.adminOrTeacherOnly && isAuth) {
+    const user = await fetchUser()
+    if (user?.role !== 'admin' && user?.role !== 'teacher') return '/'
   }
 })
 
