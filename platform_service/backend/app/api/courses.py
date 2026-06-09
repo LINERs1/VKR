@@ -4,14 +4,12 @@ from typing import List
 from app.database import get_db
 from app.models.course import Course
 from app.schemas.course import CourseResponse, CourseCreate
-import requests
-import os
 import logging
 from app.api.auth import get_current_user
 from app.models.user import User
+from app.utils.ai_client import send_webhook
 
 logger = logging.getLogger(__name__)
-AI_SERVICE_URL = os.getenv("AI_SERVICE_URL", "http://localhost:8000")
 
 router = APIRouter()
 
@@ -75,10 +73,7 @@ async def create_course(
         "id": course.id,
         "title": course.title
     }
-    try:
-        requests.post(f"{AI_SERVICE_URL}/webhook/course", json=payload, timeout=5)
-    except Exception as e:
-        logger.error(f"Failed to send webhook to AI service: {e}")
+    send_webhook("/webhook/course", payload)
 
     c_dict = {
         "id": course.id,

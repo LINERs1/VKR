@@ -137,8 +137,70 @@ def get_vector_store(course_id: str = "default") -> Chroma:
 # Retriever & chain
 # ---------------------------------------------------------------------------
 
-def get_retriever(course_id: str = "default"):
-    return get_vector_store(course_id).as_retriever(search_kwargs={"k": 4})
+def get_retriever(course_id: str = "default", k: int = 6):
+    return get_vector_store(course_id).as_retriever(search_kwargs={"k": k})
+
+
+def parse_lesson_id_from_source(source: str, course_id: str | None = None) -> int | None:
+    """lesson_{course_id}_{id}, lesson_v2_{id}_..., lesson_{id}."""
+    if not source or not source.startswith("lesson_"):
+        return None
+    parts = source.split("_")
+    if len(parts) >= 3 and parts[1] == "v2" and parts[2].isdigit():
+        return int(parts[2])
+    if course_id:
+        prefix = f"lesson_{course_id}_"
+        if source.startswith(prefix):
+            tail = source[len(prefix) :].split("_")[0]
+            if tail.isdigit():
+                return int(tail)
+    if len(parts) >= 3 and parts[-1].isdigit():
+        return int(parts[-1])
+    if len(parts) >= 2 and parts[1].isdigit():
+        return int(parts[1])
+    return None
+
+
+def _collection_doc_count(course_id: str) -> int:
+    try:
+        coll = getattr(get_vector_store(course_id), "_collection", None)
+        if coll is not None:
+            return int(coll.count())
+    except Exception as e:
+        logger.debug("collection count failed for %s: %s", course_id, e)
+    return 0
+
+
+async def retrieve_course_docs(course_id: str, query: str, k: int = 6) -> list:
+    """Семантический поиск с fallback-запросами для коротких/голосовых фраз."""
+    if _collection_doc_count(course_id) == 0:
+        logger.warning("ChromaDB пуста для course_id=%s — нужен webhook / sync_all_to_ai.py", course_id)
+        return []
+
+    retriever = get_retriever(course_id, k=k)
+    docs = await retriever.ainvoke(query)
+    if docs:
+        return docs
+
+    q = (query or "").lower()
+    fallbacks: list[str] = []
+    if any(w in q for w in ("for", "in", "цикл", "loop", "перебор", "итерац")):
+        fallbacks.extend(["цикл for in Python", "for item in", "цикл for перебирает"])
+    if "функц" in q or "def " in q:
+        fallbacks.append("определение функции def")
+    fallbacks.append(query.split()[0] if query.split() else query)
+
+    seen: set[str] = set()
+    for fb in fallbacks:
+        fb = (fb or "").strip()
+        if not fb or fb in seen:
+            continue
+        seen.add(fb)
+        docs = await retriever.ainvoke(fb)
+        if docs:
+            logger.info("RAG fallback hit for course=%s query=%r -> %r", course_id, query, fb)
+            return docs
+    return []
 
 
 def get_chain(course_name: str = None, course_id: str = "default", page_context: dict = {}, current_user = None):
@@ -151,6 +213,12 @@ def get_chain(course_name: str = None, course_id: str = "default", page_context:
     curr_path = page_context.get('current_path', '/')
     curr_page = page_context.get('current_page', 'Неизвестно')
     loc_lines = [f"- Страница: {curr_page}", f"- URL: {curr_path}"]
+    breadcrumbs = page_context.get("breadcrumbs")
+    if breadcrumbs:
+        from app.services.navigation_service import build_breadcrumbs_text
+        crumb_text = build_breadcrumbs_text(breadcrumbs)
+        if crumb_text:
+            loc_lines.append(f"- Путь: {crumb_text}")
     lesson_title = page_context.get('lesson_title')
     if lesson_title:
         lesson_idx = page_context.get('lesson_index')
@@ -217,14 +285,9 @@ def format_docs(docs: List[Document], db=None) -> str:
         
         real_path = ""
         if source.startswith("lesson_") and course_id:
-            try:
-                parts = source.split("_")
-                lesson_id_str = parts[2] if parts[1] == "v2" else parts[1]
-                if lesson_id_str.isdigit():
-                    lesson_id = int(lesson_id_str)
-                    real_path = f"/courses/{course_id}?lesson={lesson_id}"
-            except Exception as e:
-                logger.error(f"Failed to parse lesson_id from {source}: {e}")
+            lesson_id = parse_lesson_id_from_source(source, course_id)
+            if lesson_id is not None:
+                real_path = f"/courses/{course_id}?lesson={lesson_id}"
         
         path_hint = ""
         if real_path:
@@ -386,8 +449,8 @@ def ingest_text(
     splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=100)
 
     if _indexed_source_exists(store, source_name):
-        logger.info("ingest_text: already indexed, skipping: %s", source_name)
-        return {"status": "skipped", "reason": "already indexed"}
+        logger.info("ingest_text: re-indexing existing source: %s", source_name)
+        delete_document(source_name, course_id)
 
     metadata = {"source": source_name, "course_id": course_id}
     if extra_metadata:

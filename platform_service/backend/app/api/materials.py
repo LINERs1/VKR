@@ -1,8 +1,8 @@
 import os
 import uuid
 import json
-import requests
 import logging
+from app.utils.ai_client import ai_delete, send_webhook
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy.orm import Session
 from app.database import get_db
@@ -17,8 +17,6 @@ from langchain_community.document_loaders import PyPDFLoader
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-# TODO: Move to config
-AI_SERVICE_URL = os.getenv("AI_SERVICE_URL", "http://localhost:8000")
 UPLOAD_DIR = "uploads/materials"
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -106,11 +104,7 @@ def upload_material(
             "content": text,
             "source_type": material.source_type
         }
-        try:
-            requests.post(f"{AI_SERVICE_URL}/webhook/content", json=payload, timeout=10)
-        except Exception as e:
-            logger.error(f"Failed to send webhook to AI service: {e}")
-            # We don't fail the upload, but log it. In production, we'd retry.
+        send_webhook("/webhook/content", payload, timeout=10)
 
         return material
 
@@ -134,7 +128,7 @@ def delete_material(
 
     # Send delete webhook to AI Service
     try:
-        requests.delete(f"{AI_SERVICE_URL}/webhook/content/{material.source_type}/{material.course_id}/{material.id}", timeout=5)
+        ai_delete(f"/webhook/content/{material.source_type}/{material.course_id}/{material.id}", timeout=5)
     except Exception as e:
         logger.error(f"Failed to send delete webhook to AI service: {e}")
 

@@ -3,6 +3,8 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { marked } from 'marked'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuth } from '../composables/useAuth'
+import { useNotifications } from '../composables/useNotifications.js'
+import { highlightSearchKey } from '../utils/highlightUtils.js'
 import { adaptiveApi } from '../api'
 import { getApiBaseUrl } from '../api'
 import GlassHeader from '../components/GlassHeader.vue'
@@ -10,11 +12,14 @@ import GlassHeader from '../components/GlassHeader.vue'
 const route = useRoute()
 const router = useRouter()
 const { fetchUser } = useAuth()
+const { addToast } = useNotifications()
 
 const course = ref(null)
 const weakBanner = ref(null)
 const currentLesson = ref(null)
 const loading = ref(true)
+const notFound = ref(false)
+const loadError = ref('')
 const uploadStatus = ref('')
 const uploadBusy = ref(false)
 const fileInput = ref(null)
@@ -22,9 +27,18 @@ const selectedFiles = ref(null)
 
 async function loadCourse(id) {
   loading.value = true
+  notFound.value = false
+  loadError.value = ''
   try {
     const res = await fetch(`/api/courses/${id}`)
-    if (!res.ok) { router.push('/'); return }
+    if (!res.ok) {
+      notFound.value = true
+      course.value = null
+      loadError.value = res.status === 404
+        ? `Курс «${id}» не найден на платформе.`
+        : `Не удалось загрузить курс (ошибка ${res.status}).`
+      return
+    }
     course.value = await res.json()
     
     // Подхватываем урок из URL, если есть
@@ -46,7 +60,9 @@ async function loadCourse(id) {
     publishLessonContext()
     await loadWeakTopics()
   } catch (e) {
-    router.push('/')
+    notFound.value = true
+    course.value = null
+    loadError.value = 'Не удалось загрузить курс. Проверьте подключение к серверу.'
   } finally {
     loading.value = false
   }
@@ -60,6 +76,7 @@ onMounted(() => {
       if (textToFind) {
         window.pendingHighlightText = null
         setTimeout(() => highlightAndScrollToText(textToFind), 600)
+        setTimeout(() => highlightAndScrollToText(textToFind), 1400)
       }
     })
   }
@@ -156,10 +173,8 @@ watch(currentLesson, () => {
     const textToFind = window.pendingHighlightText;
     window.pendingHighlightText = null;
     
-    // Wait for DOM to fully render the new lesson content
-    setTimeout(() => {
-      highlightAndScrollToText(textToFind);
-    }, 800);
+    setTimeout(() => highlightAndScrollToText(textToFind), 800);
+    setTimeout(() => highlightAndScrollToText(textToFind), 1600);
   }
 }, { flush: 'post' })
 
@@ -167,57 +182,51 @@ function highlightAndScrollToText(text) {
   if (!text) return false;
   console.log('[highlight] trying to highlight:', text);
 
-  // Normalize: lowercase, strip punctuation, collapse whitespace
+  const tryKey = (wordLimit) => {
+    const searchStr = highlightSearchKey(text, wordLimit);
+    if (!searchStr) return null;
+    return searchStr;
+  };
+
   const normalize = (s) => String(s || '')
     .toLowerCase()
     .replace(/[.,/#!$%^&*;:{}=\-_`~()«»""''\n\r\t]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 
-  // Use first 5 words for matching
-  const searchStr = normalize(text).split(' ').filter(Boolean).slice(0, 5).join(' ');
-  if (!searchStr) return false;
-  console.log('[highlight] searching for:', searchStr);
-
-  // Try specific text elements first (most precise), then containers
   const selectors = [
     'p', 'li', 'h1', 'h2', 'h3', 'h4', 'h5',
     'td', 'blockquote', 'pre', 'code',
     'div', 'span'
   ];
 
-  for (const sel of selectors) {
-    const elements = document.querySelectorAll('.lesson-article ' + sel + ', .course-content ' + sel);
-    for (const el of elements) {
-      // Skip elements that contain other block elements (avoid matching container divs)
-      if (sel === 'div' || sel === 'span') {
-        const hasBlock = el.querySelector('p, h1, h2, h3, h4, h5, li');
-        if (hasBlock) continue;
-      }
-      const elNorm = normalize(el.innerText || el.textContent || '');
-      if (elNorm.includes(searchStr)) {
-        console.log('[highlight] found in element:', el.tagName, el);
-        // Scroll to element
-        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        
-        // Remove class if it already exists to restart animation
-        el.classList.remove('ai-highlight-block');
-        
-        // Force reflow
-        void el.offsetWidth;
-        
-        // Apply CSS class
-        el.classList.add('ai-highlight-block');
-        
-        setTimeout(() => {
+  for (const wordLimit of [5, 4, 3, 2]) {
+    const searchStr = tryKey(wordLimit);
+    if (!searchStr) continue;
+    console.log('[highlight] searching for:', searchStr);
+
+    for (const sel of selectors) {
+      const elements = document.querySelectorAll('.lesson-article ' + sel + ', .course-content ' + sel);
+      for (const el of elements) {
+        if (sel === 'div' || sel === 'span') {
+          const hasBlock = el.querySelector('p, h1, h2, h3, h4, h5, li');
+          if (hasBlock) continue;
+        }
+        const elNorm = normalize(el.innerText || el.textContent || '');
+        if (elNorm.includes(searchStr)) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
           el.classList.remove('ai-highlight-block');
-        }, 5000);
-        return true;
+          void el.offsetWidth;
+          el.classList.add('ai-highlight-block');
+          setTimeout(() => el.classList.remove('ai-highlight-block'), 5000);
+          return true;
+        }
       }
     }
   }
 
-  console.warn('[highlight] text not found on page:', searchStr);
+  console.warn('[highlight] text not found on page:', text);
+  addToast('Фрагмент не найден на странице урока', 'warning');
   return false;
 }
 
@@ -515,6 +524,15 @@ function closeAiPanel() {
   <div v-else-if="loading" class="page-loader">
     <div class="loader-spinner"></div>
     <div class="loader-text">Синхронизируем материалы…</div>
+  </div>
+
+  <div v-else-if="notFound" class="page-loader course-not-found">
+    <div class="not-found-icon">📭</div>
+    <h2 class="not-found-title">Курс не найден</h2>
+    <p class="not-found-text">{{ loadError }}</p>
+    <button type="button" class="not-found-btn" @click="router.push('/')">
+      Вернуться на главную
+    </button>
   </div>
 </template>
 
@@ -867,6 +885,34 @@ function closeAiPanel() {
 }
 
 /* ─── Loader ─────────────────────────────────── */
+.course-not-found .not-found-icon {
+  font-size: 48px;
+  margin-bottom: 12px;
+}
+.course-not-found .not-found-title {
+  margin: 0 0 8px;
+  font-size: 22px;
+  color: #f1f5f9;
+}
+.course-not-found .not-found-text {
+  margin: 0 0 20px;
+  color: #94a3b8;
+  max-width: 420px;
+  text-align: center;
+  line-height: 1.5;
+}
+.not-found-btn {
+  padding: 10px 20px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.06);
+  color: #e2e8f0;
+  cursor: pointer;
+}
+.not-found-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
 .page-loader {
   height: 100vh;
   display: flex;

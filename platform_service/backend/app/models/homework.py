@@ -40,6 +40,8 @@ class HomeworkAssignment(Base):
     teacher_feedback = Column(Text, nullable=True)
     grade = Column(Integer, nullable=True)
     ai_review_json = Column(Text, nullable=True)
+    hint_count = Column(Integer, default=0, nullable=False)
+    last_hint_at = Column(String, nullable=True)
 
     homework = relationship("Homework", back_populates="assignments")
     student = relationship("User", foreign_keys=[student_id], back_populates="homeworks_received")

@@ -81,6 +81,8 @@ class Settings(BaseSettings):
     # =========================================================
     # URL платформы — ИИ делает HTTP GET/PATCH сюда за данными ДЗ, пользователей
     PLATFORM_SERVICE_URL: str = "http://localhost:8001"
+    # Общий секрет платформа ↔ ИИ (webhooks, проверка ДЗ)
+    SERVICE_API_KEY: str = ""
 
     @cached_property
     def cors_origins(self) -> List[str]:

@@ -59,12 +59,27 @@ async def retrieve_context_for_chat(message: str, course_id: str):
 _ACTION_RE = re.compile(r'\[(NAVIGATE|SHOW_COURSES):([^\]]*)\]', re.IGNORECASE)
 
 def _normalize_nav_path(path: str) -> str:
-    p = (path or "").strip()
-    if not p or p.lower() in ("home", "главная", "главную", "main"):
-        return "/"
-    if not p.startswith("/"):
-        p = "/" + p
-    return p.rstrip("/") or "/"
+    from app.services.navigation_service import normalize_nav_path
+    return normalize_nav_path(path) or "/"
+
+
+def _process_navigate_action(raw_path: str, page_context: dict) -> tuple[str | None, str | None, list | None]:
+    """Валидация [NAVIGATE:...] по списку курсов из виджета платформы."""
+    from app.services.navigation_service import CourseNavItem, validate_navigate_path
+
+    available = (page_context or {}).get("available_courses") or []
+    courses = [CourseNavItem.from_dict(c) for c in available if isinstance(c, dict) and c.get("id")]
+    if not courses:
+        # Нет списка с виджета — только нормализация (обратная совместимость)
+        return "navigate", _normalize_nav_path(raw_path), None
+
+    res = validate_navigate_path(raw_path, courses)
+    if res.status in ("ok", "static") and res.path:
+        return "navigate", res.path, None
+    if res.status == "ambiguous":
+        return "show_courses", raw_path, res.matches
+    logger.info("Navigation rejected: %s → %s", raw_path, res.message)
+    return None, None, None
 # Регулярка для разбивки на предложения
 _SENTENCE_RE = re.compile(r'(?<=[.!?\n])\s+')
 
@@ -91,7 +106,7 @@ def _strip_nav_tags(text: str) -> str:
     """Удаляет [NAVIGATE:...] и [SHOW_COURSES:...] теги из отображаемого текста."""
     return _ACTION_RE.sub('', text).strip()
 
-async def _stream_tokens(chain, inputs: dict):
+async def _stream_tokens(chain, inputs: dict, page_context: dict | None = None):
     """Генератор токенов с обработкой экшен-тегов."""
     full_response = ""
     display_buffer = ""
@@ -123,7 +138,11 @@ async def _stream_tokens(chain, inputs: dict):
                         action_type = match.group(1).upper()
                         val = match.group(2)
                         if action_type == 'NAVIGATE':
-                            yield ('action', 'navigate', _normalize_nav_path(val))
+                            nav_kind, nav_val, _extra = _process_navigate_action(val, page_context or {})
+                            if nav_kind == 'navigate' and nav_val:
+                                yield ('action', 'navigate', nav_val)
+                            elif nav_kind == 'show_courses':
+                                yield ('action', 'show_courses', nav_val or val, _extra)
                         elif action_type == 'SHOW_COURSES':
                             yield ('action', 'show_courses', val)
                     else:
@@ -191,7 +210,7 @@ async def stream_rag_response(
 
         t_llm = time.perf_counter()
         async for event_type, *content_args in _stream_tokens(
-            chain, {"context": context, "question": message, "history": history_text}
+            chain, {"context": context, "question": message, "history": history_text}, ctx
         ):
             if event_type == 'token':
                 yield f"data: {json.dumps({'type': 'token', 'content': content_args[0]})}\n\n"
@@ -201,7 +220,10 @@ async def stream_rag_response(
                 if action_name == 'navigate':
                     yield f"data: {json.dumps({'type': 'action', 'action': 'navigate', 'path': action_val})}\n\n"
                 elif action_name == 'show_courses':
-                    yield f"data: {json.dumps({'type': 'action', 'action': 'show_courses', 'query': action_val})}\n\n"
+                    payload = {'type': 'action', 'action': 'show_courses', 'query': action_val}
+                    if len(content_args) > 2 and content_args[2]:
+                        payload['matches'] = content_args[2]
+                    yield f"data: {json.dumps(payload)}\n\n"
             elif event_type == 'full':
                 full_response = content_args[0]
 
@@ -321,7 +343,7 @@ async def stream_rag_voice_response(
         comma_re = re.compile(r'([,;]\s+)')
 
         async for event_type, *content_args in _stream_tokens(
-            chain, {"context": context, "question": message, "history": history_text}
+            chain, {"context": context, "question": message, "history": history_text}, ctx
         ):
             if event_type == 'token':
                 content = content_args[0]
@@ -351,7 +373,10 @@ async def stream_rag_voice_response(
                 if action_name == 'navigate':
                     yield f"data: {json.dumps({'type': 'action', 'action': 'navigate', 'path': action_val})}\n\n"
                 elif action_name == 'show_courses':
-                    yield f"data: {json.dumps({'type': 'action', 'action': 'show_courses', 'query': action_val})}\n\n"
+                    payload = {'type': 'action', 'action': 'show_courses', 'query': action_val}
+                    if len(content_args) > 2 and content_args[2]:
+                        payload['matches'] = content_args[2]
+                    yield f"data: {json.dumps(payload)}\n\n"
             elif event_type == 'full':
                 full_response = content_args[0]
 

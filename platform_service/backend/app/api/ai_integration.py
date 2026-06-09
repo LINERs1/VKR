@@ -125,15 +125,24 @@ def get_user(user_id: int, db: Session = Depends(get_db)):
 
 # ─── Webhook-отправщики к ИИ-сервису ─────────────────────────────────────────
 
+def _service_headers() -> dict[str, str]:
+    from app.config import settings
+    headers = {"Content-Type": "application/json"}
+    if settings.SERVICE_API_KEY:
+        headers["X-Service-Token"] = settings.SERVICE_API_KEY
+    return headers
+
+
 async def _notify_ai(method: str, path: str, data: dict = None):
     """Отправляет HTTP-запрос на ИИ-сервис."""
     url = f"{_ai_url()}{path}"
+    headers = _service_headers()
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             if method == "POST":
-                await client.post(url, json=data)
+                await client.post(url, json=data, headers=headers)
             elif method == "DELETE":
-                await client.delete(url)
+                await client.delete(url, headers=headers)
         logger.info(f"📡 Webhook → ИИ: {method} {path}")
     except Exception as e:
         logger.warning(f"⚠️ Webhook к ИИ не доставлен ({path}): {e}")

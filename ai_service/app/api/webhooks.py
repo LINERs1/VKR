@@ -20,9 +20,10 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.mirror import CourseRef, LessonRef
 from app.models.navigation import NavNode, NavEdge, NodeAccessRule
+from app.services.platform_auth import verify_service_token
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(verify_service_token)])
 
 
 # ─── Pydantic схемы входящих вебхуков ───────────────────────────────────────

@@ -3,7 +3,11 @@ import { ref, nextTick, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { UltravoxSession, AgentReaction } from 'ultravox-client'
 import { useAuth } from '../composables/useAuth'
-import { hwApi, chatApi, analyticsApi, notificationsApi } from '../api'
+import { hwApi, chatApi, analyticsApi, notificationsApi, navigationApi } from '../api'
+import { prepareHighlightText, dispatchHighlight } from '../utils/highlightUtils.js'
+import { useNotifications } from '../composables/useNotifications.js'
+
+const { addToast } = useNotifications()
 import { checkingAssignments } from '../composables/useNotifications.js'
 
 const route = useRoute()
@@ -139,11 +143,41 @@ function homeworkContextFields() {
   }
 }
 
+function buildBreadcrumbs() {
+  const crumbs = [{ label: 'Главная', path: '/' }]
+  if (route.path.startsWith('/courses/') && courseId.value && courseId.value !== 'default') {
+    crumbs.push({ label: courseName.value || courseId.value, path: `/courses/${courseId.value}` })
+    const lesson = getActiveLessonContext()
+    if (lesson?.lessonTitle) {
+      crumbs.push({ label: lesson.lessonTitle, path: route.fullPath })
+    }
+  } else if (route.path.startsWith('/homeworks')) {
+    crumbs.push({ label: 'Домашние задания', path: '/homeworks' })
+  } else if (route.path.startsWith('/journal')) {
+    crumbs.push({ label: 'Журнал', path: '/journal' })
+  } else if (route.path.startsWith('/profile')) {
+    crumbs.push({ label: 'Профиль', path: '/profile' })
+  } else if (route.path.startsWith('/analytics')) {
+    crumbs.push({ label: 'Аналитика', path: '/analytics' })
+  }
+  return crumbs
+}
+
+function coursesNavPayload() {
+  return allCourses.value.map(c => ({
+    id: c.id,
+    title: c.title,
+    description: c.description || '',
+    lessons: c.lessons || [],
+  }))
+}
+
 const pageContext = computed(() => ({
   current_path: route.path,
   current_page: currentPage.value,
   current_course_id:   courseId.value !== 'default' ? courseId.value : null,
   current_course_name: courseId.value !== 'default' ? courseName.value : null,
+  breadcrumbs: buildBreadcrumbs(),
   ...lessonContextFields(),
   available_courses: allCourses.value.map(c => ({
     id: c.id, title: c.title, icon: c.icon || '', description: c.description || ''
@@ -246,6 +280,7 @@ async function refreshPageContextFromRoute() {
 watch(
   () => [route.path, route.params.id, route.fullPath],
   async () => {
+    lastVoiceNavPath = ''
     await refreshPageContextFromRoute()
     await loadChatHistory()
     if (voiceMode.value) {
@@ -347,6 +382,7 @@ const voiceVolumePct = computed({
   set: (v) => { voiceVolume.value = Math.max(0, Math.min(1, Number(v) / 100)) },
 })
 let lastVoiceNavPath = null
+let lastVoiceNavTargetKey = null
 let voiceUserHasSpoken = false
 const VOICE_IDLE_MS = 30_000
 let voiceIdleTimer = null
@@ -358,11 +394,28 @@ function markVoiceNavHandled() {
   voiceNavHandledAt = Date.now()
 }
 
-function isRecentVoiceNav() {
-  return Date.now() - voiceNavHandledAt < 3500
+function navTargetKey(target) {
+  if (!target) return ''
+  return JSON.stringify({ path: target.path || '/', query: target.query || {} })
+}
+
+function isDuplicateVoiceNav(target) {
+  return navTargetKey(target) === lastVoiceNavTargetKey && Date.now() - voiceNavHandledAt < 3500
 }
 
 const STATIC_NAV_PATHS = ['/', '/profile', '/journal', '/homeworks', '/analytics', '/homeworks/workshop']
+/** Специфичные ключи — раньше в списке; широкие (python) — в конце. Курс берётся только если есть в allCourses. */
+const COURSE_ALIASES = [
+  { id: 'python-100-days-ru', keys: ['100 дн', 'сто дн', 'сто дней', 'за 100', '100 days'] },
+  { id: 'react-30-days-ru', keys: ['react', 'реакт'] },
+  { id: 'js-30-days-ru', keys: ['javascript', 'джаваскрипт', 'js '] },
+  { id: 'ml', keys: ['машинн', 'machine learning', 'ml '] },
+  { id: 'webdev', keys: ['веб-разработ', 'веб разработ', 'webdev', 'frontend'] },
+  { id: 'sql', keys: ['sql', 'баз данных', 'postgresql'] },
+  { id: 'algorithms', keys: ['алгоритм', 'алгоритмизации'] },
+  { id: 'python-100-days-ru', keys: ['python', 'питон', 'пайтон'] },
+  { id: 'python', keys: ['python', 'питон', 'пайтон'] },
+]
 const VOICE_YES_RE = /\b(да|давай|ок|окей|конечно|переводи|открывай|хорошо|ага|угу)\b/ui
 const HIDDEN_VOICE_CTX_RE = /^\[СИСТЕМА:\s*обновление контекста/i
 
@@ -391,6 +444,42 @@ function lastVisibleUserTranscript(transcripts) {
   return ''
 }
 
+function effectiveCourseId() {
+  if (route.path.startsWith('/courses/') && route.params.id) return String(route.params.id)
+  const ctx = window.currentCourseLessonContext
+  if (ctx?.courseId) return String(ctx.courseId)
+  if (courseId.value && courseId.value !== 'default') return courseId.value
+  return 'default'
+}
+
+function setPendingHighlight(raw, options = {}) {
+  const validateOnPage = options === true || options.validateOnPage === true
+  const pageContent = validateOnPage ? getPageText() : ''
+  const prepared = prepareHighlightText(raw, pageContent, { validateOnPage })
+  if (!prepared.ok) {
+    if (prepared.reason === 'not_found' && prepared.text) {
+      // Навигация на другой урок — текст появится после загрузки страницы
+      window.pendingHighlightText = prepared.text
+      return true
+    }
+    if (prepared.reason === 'not_found') {
+      addToast('Фрагмент для подсветки не найден на странице', 'warning')
+    } else if (String(raw || '').trim()) {
+      addToast('Текст подсветки отклонён (слишком короткий)', 'warning')
+    }
+    return false
+  }
+  window.pendingHighlightText = prepared.text
+  return true
+}
+
+function tryHighlightOnCurrentPage(text) {
+  if (!text) return false
+  setPendingHighlight(text, { validateOnPage: false })
+  dispatchHighlight(window.pendingHighlightText, 400)
+  return true
+}
+
 function stripNavFromSpeech(text) {
   if (!text) return ''
   return String(text)
@@ -404,7 +493,7 @@ function stripNavFromSpeech(text) {
     .trim()
 }
 
-function runVoiceNavigate(params) {
+async function runVoiceNavigate(params) {
   let raw = String(params?.path || params?.route || params?.url || '').trim()
   const highlight = String(params?.highlight_text || '').trim()
   
@@ -426,10 +515,11 @@ function runVoiceNavigate(params) {
   }
   
   if (highlight) {
-    window.pendingHighlightText = highlight
+    setPendingHighlight(highlight, { validateOnPage: false })
   }
+
+  if (!allCourses.value.length) await loadAllCourses()
   
-  // LOGGING TOOL PARAMS TO DEBUG NAV FAILURES
   fetch('/api/analytics/event', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -439,8 +529,18 @@ function runVoiceNavigate(params) {
       meta: params 
     })
   }).catch(() => {})
-  
-  const ok = tryVoiceNavigate(raw)
+
+  const resolved = await resolveNavViaApi(raw)
+  if (!resolved.ok) {
+    return {
+      result: resolved.ambiguous
+        ? 'Показан список курсов на экране. Попроси пользователя выбрать.'
+        : 'Переход не выполнен: курс или страница не найдены. Сообщи об этом пользователю.',
+      responseType: 'tool-response',
+      agentReaction: AgentReaction.SPEAKS,
+    }
+  }
+  const ok = tryVoiceNavigate(resolved.path)
   if (ok) {
     return {
       result:
@@ -450,7 +550,7 @@ function runVoiceNavigate(params) {
     }
   }
   return {
-    result: 'Переход не выполнен: путь не распознан. Уточни у пользователя или выбери путь из списка.',
+    result: 'Переход не выполнен: курс или страница не найдены в системе. Скажи пользователю, что такого курса нет, и предложи выбрать из списка на главной.',
     responseType: 'tool-response',
     agentReaction: AgentReaction.SPEAKS,
   }
@@ -487,12 +587,10 @@ function parseNavTarget(rawPath) {
   const raw = String(rawPath || '').trim()
   if (!raw) return null
 
-  // Legacy vpath://page/ support (just in case old sessions still use it)
   if (raw.startsWith('vpath://page/')) {
     return { path: raw.replace('vpath://page', '') }
   }
 
-  // Real path (with optional ?lesson=X query)
   let pathname = raw
   let query = {}
   if (raw.includes('?')) {
@@ -500,17 +598,15 @@ function parseNavTarget(rawPath) {
     pathname = raw.slice(0, idx)
     query = Object.fromEntries(new URLSearchParams(raw.slice(idx + 1)))
   }
-  const path = resolveNavigatePath(pathname)
-  if (!path) return null
-  return Object.keys(query).length ? { path, query } : { path }
+  const pathOnly = (resolveNavigatePathLocal(pathname) || pathname).split('?')[0]
+  if (!pathOnly) return null
+  return Object.keys(query).length ? { path: pathOnly, query } : { path: pathOnly }
 }
 
 function extractNavPathFromText(raw) {
   if (!raw) return null
   const tag = raw.match(/\[NAVIGATE:\s*([^\]]*)\]/i)
   if (tag) return normalizeNavPath(tag[1])
-
-  if (/\bnavigate\s+(?:to\s+)?home\b/i.test(raw)) return '/'
 
   const patterns = [
     /\bNAVIGATE\s*:?\s*(\/[^\s\],.]*)/i,
@@ -521,7 +617,7 @@ function extractNavPathFromText(raw) {
     const m = raw.match(re)
     if (!m) continue
     let p = (m[1] || '').trim()
-    if (!p) return '/'
+    if (!p) return null
     if (!p.startsWith('/')) p = `/courses/${p}`
     return normalizeNavPath(p)
   }
@@ -579,6 +675,36 @@ function detectLessonPathInText(text) {
   return null
 }
 
+function resolveCourseSlug(slug) {
+  const courses = allCourses.value || []
+  if (!courses.length || !slug) return null
+
+  const normalized = decodeURIComponent(String(slug)).toLowerCase().trim()
+  let found = courses.find(c => c.id?.toLowerCase() === normalized)
+  if (found) return found.id
+
+  const byTitle = courses
+    .filter(c => {
+      const t = (c.title || '').toLowerCase()
+      return t && (normalized.includes(t) || t.includes(normalized))
+    })
+    .sort((a, b) => (b.title?.length || 0) - (a.title?.length || 0))
+  if (byTitle.length) return byTitle[0].id
+
+  for (const { id, keys } of COURSE_ALIASES) {
+    if (keys.some(k => normalized.includes(k))) {
+      found = courses.find(c => c.id === id)
+      if (found) return found.id
+    }
+  }
+
+  found = courses.find(c => {
+    const id = (c.id || '').toLowerCase()
+    return normalized.includes(id) || id.includes(normalized)
+  })
+  return found?.id ?? null
+}
+
 function detectCoursePathInText(text) {
   const courses = allCourses.value || []
   if (!courses.length || !text) return null
@@ -593,16 +719,7 @@ function detectCoursePathInText(text) {
     }
   }
 
-  const aliases = [
-    { id: 'react-30-days-ru', keys: ['react', 'реакт'] },
-    { id: 'js-30-days-ru', keys: ['javascript', 'js', 'джаваскрипт', '30 days'] },
-    { id: 'python-100-days-ru', keys: ['python', 'питон', 'пайтон', '100 дн', 'сто дн'] },
-    { id: 'ml', keys: ['машинн', 'machine learning', 'ml '] },
-    { id: 'webdev', keys: ['веб-разработ', 'веб разработ', 'webdev', 'frontend'] },
-    { id: 'sql', keys: ['sql', 'баз данных', 'postgresql'] },
-    { id: 'algorithms', keys: ['алгоритм', 'алгоритмизации', 'программировани'] },
-  ]
-  for (const { id, keys } of aliases) {
+  for (const { id, keys } of COURSE_ALIASES) {
     if (keys.some(k => lower.includes(k))) {
       const c = courses.find(x => x.id === id)
       if (c) return `/courses/${c.id}`
@@ -612,78 +729,106 @@ function detectCoursePathInText(text) {
 }
 
 function detectCourseOfferInText(text) {
-  if (!text || !/перевест|перейти|открыть|подходит|хотите|готов|найден|нашёл|нашла/i.test(text)) return null
+  if (!text || !/перевест|перейти|открыть|открываю|открою|покажи|покажу|подходит|хотите|готов|найден|нашёл|нашла/i.test(text)) return null
   return detectCoursePathInText(text)
 }
 
-function resolveNavigatePath(rawPath) {
+/** Локальный fallback, если API ИИ недоступен (офлайн / dev). */
+function resolveNavigatePathLocal(rawPath) {
   const path = normalizeNavPath(rawPath)
   if (!path) return null
 
-  if (STATIC_NAV_PATHS.includes(path)) return path
-  
-  if (path.startsWith('/homeworks/')) return path
-  if (path.startsWith('/journal/')) return path
+  const pathname = path.includes('?') ? path.split('?')[0] : path
+  const query = path.includes('?') ? path.slice(path.indexOf('?')) : ''
 
-  const m = path.match(/^\/courses\/(.+)$/i)
-  let slug = ''
-  if (m) {
-    slug = decodeURIComponent(m[1]).toLowerCase().trim()
-    // If it looks like a direct course path, just trust the AI and return it!
-    // This prevents caching issues where the frontend has an old course list.
-    if (slug) return `/courses/${slug}`
-  } else {
-    slug = decodeURIComponent(path.replace(/^\//, '')).toLowerCase().trim()
-  }
+  if (STATIC_NAV_PATHS.includes(pathname)) return pathname + query
+  if (pathname.startsWith('/homeworks/')) return pathname + query
+  if (pathname.startsWith('/journal/')) return pathname + query
+
+  const m = pathname.match(/^\/courses\/(.+)$/i)
+  const slug = m
+    ? decodeURIComponent(m[1]).toLowerCase().trim()
+    : decodeURIComponent(pathname.replace(/^\//, '')).toLowerCase().trim()
+
+  if (!slug) return null
 
   const courses = allCourses.value || []
-  if (!courses.length) return `/courses/${slug}` // Fallback
+  if (!courses.length) return null
 
-  let found = courses.find(c => c.id?.toLowerCase() === slug)
-  if (found) return `/courses/${found.id}`
+  const cid = resolveCourseSlug(slug)
+  if (!cid) return null
 
-  const keywords = [
-    { id: 'react-30-days-ru', keys: ['react', 'реакт'] },
-    { id: 'js-30-days-ru', keys: ['javascript', 'js', 'джаваскрипт', '30 days'] },
-    { id: 'python-100-days-ru', keys: ['python', 'питон', 'пайтон'] },
-    { id: 'ml', keys: ['ml', 'машинн', 'machine', 'learning'] },
-    { id: 'webdev', keys: ['web', 'веб', 'frontend', 'html'] },
-    { id: 'sql', keys: ['sql', 'баз данных', 'postgres'] },
-  ]
-  for (const { id, keys } of keywords) {
-    if (keys.some(k => slug.includes(k))) {
-      return `/courses/${id}`
-    }
-  }
-
-  found = courses.find(c => {
-    const t = (c.title || '').toLowerCase()
-    return t.includes(slug) || slug.includes((c.id || '').toLowerCase())
-  })
-  if (found) return `/courses/${found.id}`
-  
-  return `/courses/${slug}`
+  return `/courses/${cid}${query}`
 }
 
-function runOpenLesson(params) {
-  const cid = params.course_id
-  const idx = params.lesson_number
+function showAmbiguousCourses(matches) {
+  const list = (matches || []).map(m => ({
+    id: m.id,
+    title: m.title,
+    description: '',
+    icon: m.icon || '📚',
+  }))
+  courseSelectionList.value = list.length ? list : allCourses.value
+  showCourseSelectionModal.value = true
+}
+
+/** Резолвинг через API ИИ-сервиса (платформа передаёт свой список курсов). */
+async function resolveNavViaApi(rawPath) {
+  if (!allCourses.value.length) await loadAllCourses()
+  try {
+    const res = await navigationApi.resolve({
+      path_or_query: rawPath,
+      courses: coursesNavPayload(),
+    })
+    if ((res.status === 'ok' || res.status === 'static') && res.path) {
+      return { ok: true, path: res.path }
+    }
+    if (res.status === 'ambiguous') {
+      showAmbiguousCourses(res.matches)
+      addToast('Найдено несколько курсов — выберите нужный', 'info')
+      return { ok: false, ambiguous: true }
+    }
+    addToast(res.message || 'Курс или страница не найдены', 'error')
+    return { ok: false }
+  } catch (e) {
+    console.warn('[nav] API fallback:', e)
+    const local = resolveNavigatePathLocal(rawPath)
+    if (local) return { ok: true, path: local }
+    addToast('Не удалось выполнить переход', 'error')
+    return { ok: false }
+  }
+}
+
+async function runOpenLesson(params) {
+  const rawCid = String(params?.course_id || params?.course || '').trim()
+  const idx = params?.lesson_number || params?.lesson
   const highlight = String(params?.highlight_text || '').trim()
+
+  if (!allCourses.value.length) await loadAllCourses()
+
+  const slug = rawCid.replace(/^\/courses\//, '').split('?')[0]
+  const cid = resolveCourseSlug(slug) || resolveCourseSlug(rawCid)
   
   if (!cid || !idx) {
     return {
-      result: 'Ошибка: Не передан course_id или lesson_number',
+      result: cid
+        ? 'Ошибка: Не передан lesson_number (порядковый номер урока).'
+        : `Ошибка: Курс «${rawCid || '?'}» не найден в системе.`,
       responseType: 'tool-response',
       agentReaction: AgentReaction.SPEAKS,
     }
   }
 
   if (highlight) {
-    window.pendingHighlightText = highlight
+    setPendingHighlight(highlight, { validateOnPage: false })
   }
 
   const target = { path: `/courses/${cid}`, query: { lesson_idx: idx } }
-  router.push(target)
+  try {
+    router.push(target).catch(e => alert('Router error: ' + e.message))
+  } catch(e) {
+    alert('Nav error: ' + e.message)
+  }
   
   return {
     result: `Переход на урок ${idx} выполнен. Урок уже открыт на экране. Не комментируй смену экрана и ничего не говори об этом.`,
@@ -722,42 +867,88 @@ function navigateToCourse(courseId) {
   router.push(`/courses/${courseId}`)
 }
 
+async function runOpenAdjacentLesson(params) {
+  const delta = Number(params?.delta ?? 0)
+  if (!delta || Math.abs(delta) !== 1) {
+    return {
+      result: 'Укажи delta: 1 (следующий) или -1 (предыдущий урок).',
+      responseType: 'tool-response',
+      agentReaction: AgentReaction.SPEAKS,
+    }
+  }
+  const lesson = getActiveLessonContext()
+  const cid = courseId.value !== 'default' ? courseId.value : lesson?.courseId
+  const curIdx = lesson?.lessonIndex || Number(route.query.lesson_idx) || 1
+
+  if (!cid || !route.path.startsWith('/courses/')) {
+    return {
+      result: 'Сначала открой курс — сейчас нет активного урока для листания.',
+      responseType: 'tool-response',
+      agentReaction: AgentReaction.SPEAKS,
+    }
+  }
+
+  if (!allCourses.value.length) await loadAllCourses()
+  try {
+    const res = await navigationApi.adjacentLesson({
+      course_id: cid,
+      current_lesson_index: curIdx,
+      delta,
+      courses: coursesNavPayload(),
+    })
+    if (res.status === 'ok' && res.path) {
+      tryVoiceNavigate(res.path)
+      return {
+        result: res.message || 'Переход выполнен.',
+        responseType: 'tool-response',
+        agentReaction: AgentReaction.LISTENS,
+      }
+    }
+    return {
+      result: res.message || 'Не удалось перейти к соседнему уроку.',
+      responseType: 'tool-response',
+      agentReaction: AgentReaction.SPEAKS,
+    }
+  } catch (e) {
+    return {
+      result: 'Ошибка навигации по урокам.',
+      responseType: 'tool-response',
+      agentReaction: AgentReaction.SPEAKS,
+    }
+  }
+}
+
 function tryVoiceNavigate(rawPath) {
   const target = parseNavTarget(rawPath)
   if (!target) {
     console.warn('[nav] неизвестный путь:', rawPath)
     recordNavMetric(false, rawPath)
+    addToast('Не удалось распознать маршрут', 'error')
     return false
   }
 
   const targetPath = (target.path || '/').replace(/\/+$/, '') || '/'
-  const current = (route.path || '/').replace(/\/+$/, '') || '/'
-  const samePath = current === targetPath
-  const sameLesson =
-    !target.query?.lesson || String(route.query.lesson || '') === String(target.query.lesson)
 
-  if (samePath && sameLesson) {
-    pendingNavPath = null
-    if (window.pendingHighlightText) {
-      window.dispatchEvent(new CustomEvent('eduai-highlight-text'))
-    }
-    if (!isRecentVoiceNav()) scheduleVoicePageContextPush(300, true)
+  if (isDuplicateVoiceNav(target)) {
     return true
   }
-
-  if (String(rawPath) === lastVoiceNavPath) return true
   lastVoiceNavPath = String(rawPath)
+  lastVoiceNavTargetKey = navTargetKey(target)
   pendingNavPath = null
   markVoiceNavHandled()
   skipNextRouteContextPush = true
   recordNavMetric(true, targetPath)
-  router.push(target)
+
+  try {
+    router.push(target).catch(() => {})
+  } catch(e) {
+    console.warn('[nav] err', e)
+  }
+
   scheduleVoicePageContextPush(900, true)
-  // Capture highlight text NOW before watch clears it
   const pendingHL = window.pendingHighlightText || ''
   if (pendingHL) {
     setTimeout(() => {
-      // Pass text in event detail so it works even if pendingHighlightText was cleared
       window.dispatchEvent(new CustomEvent('eduai-highlight-text', { detail: { text: pendingHL } }))
     }, 1200)
   }
@@ -772,7 +963,7 @@ function voiceContextKey() {
 
 function buildVoiceContextMessage() {
   const pageText = getPageText()
-  const cid = courseId.value || 'default'
+  const cid = effectiveCourseId()
   const cname = courseName.value || 'EduAI'
   const lesson = getActiveLessonContext()
   const lessonBlock = lesson
@@ -804,12 +995,16 @@ function buildVoiceContextMessage() {
         : hw && route.path.startsWith('/homeworks/')
           ? `- Домашнее задание: «${hw.title}»${quizCount ? `, тестов: ${quizCount}` : ''}. Выберите ученика или откройте форму ответа.\n`
           : ''
+  const crumbs = buildBreadcrumbs().map(b => b.label).join(' → ')
+  const crumbLine = crumbs ? `- Путь: ${crumbs}\n` : ''
+
   return `[СИСТЕМА: обновление контекста страницы]
 ВАЖНО: это тихое обновление. Не отвечай вслух, не повторяй «открываю», «перехожу» и т.п. Жди реплику пользователя.
 
 Пользователь сейчас здесь:
 - Страница: ${currentPage.value}
 - URL: ${route.path}
+${crumbLine}
 - Курс: ${cname} (course_id: ${cid})
 ${lessonBlock}${lessonsBlock}${hwBlock}- Для queryKnowledgeBase используй course_id: ${cid}
 - Для списка несданных ДЗ — getHomeworkReminders
@@ -844,6 +1039,10 @@ async function runVoiceRagQuery(params) {
   }
 
   if (!query?.trim()) return 'Нужен поисковый запрос по материалам курса.'
+  const cid = effectiveCourseId()
+  if (!cid || cid === 'default') {
+    return 'Откройте страницу курса, чтобы искать в его материалах.'
+  }
   try {
     const token = localStorage.getItem('token')
     const headers = { 'Content-Type': 'application/json' }
@@ -853,19 +1052,37 @@ async function runVoiceRagQuery(params) {
       headers,
       body: JSON.stringify({
         query: query.trim(),
-        course_id: courseId.value,
+        course_id: cid,
         session_id: voiceSessionId,
       }),
     })
     if (!res.ok) throw new Error(await res.text())
     const data = await res.json()
+    const hl = data.highlight_text || data.highlightText
+    if (hl) {
+      const targetPath = data.vpath || ''
+      const onSameLesson =
+        !targetPath ||
+        route.fullPath === targetPath ||
+        (targetPath.includes('lesson=') &&
+          route.query.lesson &&
+          targetPath.includes(`lesson=${route.query.lesson}`))
+      if (onSameLesson) {
+        tryHighlightOnCurrentPage(hl)
+      } else {
+        setPendingHighlight(hl, { validateOnPage: false })
+      }
+    }
+    if (data.indexed_chunks === 0) {
+      addToast('Материалы курса не проиндексированы — запустите sync_all_to_ai.py', 'warning')
+    }
     return data.results || 'Информация по запросу не найдена в материалах курса.'
   } catch (e) {
     return `Ошибка поиска в материалах: ${e.message || e}.`
   }
 }
 
-async function runVoiceHomeworkReview() {
+async function runVoiceHomeworkReview(params = {}) {
   const u = user.value || (await fetchUser())
   if (u?.role !== 'teacher') {
     return 'Проверка домашних заданий доступна только преподавателю.'
@@ -874,6 +1091,15 @@ async function runVoiceHomeworkReview() {
   const assignmentId = hw?.assignment?.id
   if (!assignmentId || !route.path.startsWith('/homeworks/')) {
     return 'Откройте страницу домашнего задания и выберите ученика в списке слева, затем попросите проверить снова.'
+  }
+  const studentName = hw.assignment.student
+  const confirmed = params?.confirm === true || params?.confirmed === true
+  if (!confirmed) {
+    return (
+      `Спроси преподавателя: «Проверить работу ${studentName} с помощью ИИ?» ` +
+      `Если ответ «да», «давай», «проверяй» — вызови reviewHomework с confirm=true. ` +
+      `Без явного подтверждения проверку не запускай.`
+    )
   }
   const status = hw.assignment.status
   if (status === 'graded') {
@@ -888,7 +1114,6 @@ async function runVoiceHomeworkReview() {
     return `У ученика ${hw.assignment.student} ещё нет сданной работы для проверки.`
   }
 
-  const studentName = hw.assignment.student
   voiceState.value = 'THINKING'
 
   void (async () => {
@@ -1059,6 +1284,7 @@ async function syncVoicePageContext() {
     current_page: currentPage.value,
     current_path: route.path,
     page_content: getPageText(),
+    breadcrumbs: buildBreadcrumbs(),
     ...lessonContextFields(),
     ...homeworkContextFields(),
   }
@@ -1212,6 +1438,7 @@ async function startUltravoxSession() {
         current_path: route.path,
         page_content: getPageText(),
         voice_id: null,
+        breadcrumbs: buildBreadcrumbs(),
         available_courses: allCourses.value.map(c => ({
           id: c.id,
           title: c.title,
@@ -1234,8 +1461,9 @@ async function startUltravoxSession() {
     })
     uvSession.registerToolImplementation('navigatePage', (params) => runVoiceNavigate(params))
     uvSession.registerToolImplementation('openLesson', (params) => runOpenLesson(params))
+    uvSession.registerToolImplementation('openAdjacentLesson', (params) => runOpenAdjacentLesson(params))
     uvSession.registerToolImplementation('queryKnowledgeBase', (params) => runVoiceRagQuery(params))
-    uvSession.registerToolImplementation('reviewHomework', () => runVoiceHomeworkReview())
+    uvSession.registerToolImplementation('reviewHomework', (params) => runVoiceHomeworkReview(params))
     uvSession.registerToolImplementation('reviewAllHomeworks', () => runVoiceMassHomeworkReview())
     uvSession.registerToolImplementation('getTeacherSummary', () => runTeacherSummary())
     uvSession.registerToolImplementation('getHomeworkReminders', () => runVoiceReminders())
@@ -1325,10 +1553,15 @@ async function startUltravoxSession() {
         voiceTranscript.value = last.text
         const userText = (last.text || '').trim()
         if (VOICE_YES_RE.test(userText) && pendingNavPath) {
-          tryVoiceNavigate(pendingNavPath)
+          void resolveNavViaApi(pendingNavPath).then(r => { if (r.ok) tryVoiceNavigate(r.path) })
       } else {
-          const userNav = detectStaticNavInText(userText)
-          if (userNav) tryVoiceNavigate(userNav)
+          const userNav =
+            detectCoursePathInText(userText) ||
+            detectStaticNavInText(userText) ||
+            detectLessonPathInText(userText)
+          if (userNav) {
+            void resolveNavViaApi(userNav).then(r => { if (r.ok) tryVoiceNavigate(r.path) })
+          }
         }
       } else if (last.speaker === 'agent') {
         const raw = last.text || ''
@@ -1339,11 +1572,12 @@ async function startUltravoxSession() {
 
         let navPath = extractNavPathFromText(raw)
         if (!navPath) navPath = detectLessonPathInText(display) || detectLessonPathInText(raw)
+        if (!navPath) navPath = detectCoursePathInText(display) || detectCoursePathInText(raw)
         if (!navPath) navPath = detectStaticNavInText(display)
-        if (navPath && !isRecentVoiceNav()) {
-          tryVoiceNavigate(navPath)
+        if (navPath) {
+          void resolveNavViaApi(navPath).then(r => { if (r.ok) tryVoiceNavigate(r.path) })
         } else if (!navPath) {
-          const offer = detectCourseOfferInText(display) || detectLessonPathInText(display)
+          const offer = detectCourseOfferInText(display) || detectCoursePathInText(display)
           if (offer) pendingNavPath = offer
         }
       }
@@ -1362,7 +1596,7 @@ async function startUltravoxSession() {
       try {
         const data = JSON.parse(e.data)
         if (data?.type === 'navigate' && data?.path) {
-          router.push(data.path)
+          void resolveNavViaApi(data.path).then(r => { if (r.ok) tryVoiceNavigate(r.path) })
           scheduleVoicePageContextPush(700, true)
         }
       } catch {}
@@ -2305,17 +2539,20 @@ const quickSuggestions = computed(() => {
 })
 function sendSuggestion(text) { message.value = text; sendStream() }
 
-function executeAction(evt) {
+async function executeAction(evt) {
   if (evt.action === 'show_courses') {
-    runShowCourseSelection({ query: evt.query })
+    if (evt.matches?.length) showAmbiguousCourses(evt.matches)
+    else runShowCourseSelection({ query: evt.query })
     return
   }
   if (evt.action !== 'navigate' || evt.path === undefined || evt.path === null) return
-  const path = resolveNavigatePath(evt.path)
-  if (!path) {
+  const resolved = await resolveNavViaApi(evt.path)
+  if (!resolved.ok) {
     recordNavMetric(false, evt.path)
+    errorText.value = 'Курс не найден. Проверьте название или выберите курс на главной.'
     return
   }
+  const path = resolved.path
   recordNavMetric(true, path)
   const delay = voiceMode.value ? 500 : 300
   setTimeout(() => {

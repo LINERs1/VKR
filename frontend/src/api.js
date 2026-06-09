@@ -5,10 +5,13 @@ export function getApiBaseUrl(endpoint = '') {
   }
   
   // AI Service endpoints -> port 8000
-  if (endpoint.startsWith('/chat') || 
-      endpoint.startsWith('/analytics') || 
-      endpoint.startsWith('/adaptive') || 
-      endpoint.startsWith('/ultravox')) {
+  if (endpoint.startsWith('/chat') ||
+      endpoint.startsWith('/analytics') ||
+      endpoint.startsWith('/adaptive') ||
+      endpoint.startsWith('/ultravox') ||
+      endpoint.startsWith('/navigation') ||
+      endpoint.startsWith('/audit') ||
+      endpoint.startsWith('/embeddable')) {
     return 'http://127.0.0.1:8000/api'
   }
   
@@ -130,6 +133,34 @@ export const notificationsApi = {
 export const chatApi = {
   getHistory: (courseId, limit = 12) =>
     apiFetch(`/chat/history?course_id=${encodeURIComponent(courseId || 'default')}&limit=${limit}`),
+}
+
+/** API навигации ИИ-ассистента (embeddable — курсы передаёт хост-платформа). */
+export const navigationApi = {
+  resolve: (body) =>
+    apiFetch('/navigation/resolve', { method: 'POST', body: JSON.stringify(body) }),
+  validate: (body) =>
+    apiFetch('/navigation/validate', { method: 'POST', body: JSON.stringify(body) }),
+  adjacentLesson: (body) =>
+    apiFetch('/navigation/adjacent-lesson', { method: 'POST', body: JSON.stringify(body) }),
+  validateHighlight: (body) =>
+    apiFetch('/navigation/validate-highlight', { method: 'POST', body: JSON.stringify(body) }),
+  syncStatus: () => apiFetch('/navigation/sync-status'),
+}
+
+export const auditApi = {
+  listEvents: (params = {}) => {
+    const q = new URLSearchParams()
+    if (params.days) q.set('days', params.days)
+    if (params.action) q.set('action', params.action)
+    if (params.limit) q.set('limit', params.limit)
+    const qs = q.toString()
+    return apiFetch(`/audit/events${qs ? `?${qs}` : ''}`)
+  },
+}
+
+export const embeddableApi = {
+  contract: () => apiFetch('/embeddable/contract'),
 }
 
 export const workshopApi = {

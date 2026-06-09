@@ -1,0 +1,242 @@
+[
+  [
+    "Главная",
+    "/"
+  ],
+  [
+    "Профиль",
+    "/profile"
+  ],
+  [
+    "Журнал успеваемости",
+    "/journal"
+  ],
+  [
+    "Домашние задания",
+    "/homeworks"
+  ],
+  [
+    "Аналитика",
+    "/analytics"
+  ],
+  [
+    "Мастерская ДЗ",
+    "/homeworks/workshop"
+  ],
+  [
+    "Курс: Основы алгоритмизации и программирования",
+    "/courses/algorithms"
+  ],
+  [
+    "Курс: Веб-разработка с нуля",
+    "/courses/webdev"
+  ],
+  [
+    "Курс: SQL и базы данных",
+    "/courses/sql"
+  ],
+  [
+    "Курс: Python за 100 дней (Первые 10 дней)",
+    "/courses/python-100-days-ru"
+  ],
+  [
+    "Курс: Основы JavaScript (learn.javascript.ru)",
+    "/courses/js-30-days-ru"
+  ],
+  [
+    "Курс: Основы React (ru.react.dev)",
+    "/courses/react-30-days-ru"
+  ],
+  [
+    "Курс: Машинное обучение (ODS mlcourse.ai)",
+    "/courses/ml"
+  ],
+  [
+    "Урок 3: ПРАКТИЧЕСКАЯ РАБОТА №1. Построение линейных и ветвящихся блок-схем.",
+    "/courses/algorithms?lesson=9"
+  ],
+  [
+    "Урок 4: ПРАКТИЧЕСКАЯ РАБОТА №2. Построение циклических блок-схем.",
+    "/courses/algorithms?lesson=10"
+  ],
+  [
+    "Урок 5: ПРАКТИЧЕСКАЯ РАБОТА №3. Построение алгоритмов с помощью псевдокода.",
+    "/courses/algorithms?lesson=11"
+  ],
+  [
+    "Урок 0: Урок 1. Привет, мир!",
+    "/courses/js-30-days-ru?lesson=22"
+  ],
+  [
+    "Урок 1: Урок 2. Структура кода",
+    "/courses/js-30-days-ru?lesson=23"
+  ],
+  [
+    "Урок 2: Урок 3. Строгий режим — \"use strict\"",
+    "/courses/js-30-days-ru?lesson=24"
+  ],
+  [
+    "Урок 3: Урок 4. Переменные",
+    "/courses/js-30-days-ru?lesson=25"
+  ],
+  [
+    "Урок 4: Урок 5. Типы данных",
+    "/courses/js-30-days-ru?lesson=26"
+  ],
+  [
+    "Урок 5: Урок 6. Взаимодействие: alert, prompt, confirm",
+    "/courses/js-30-days-ru?lesson=27"
+  ],
+  [
+    "Урок 6: Урок 7. Преобразование типов",
+    "/courses/js-30-days-ru?lesson=28"
+  ],
+  [
+    "Урок 7: Урок 8. Базовые операторы, математика",
+    "/courses/js-30-days-ru?lesson=29"
+  ],
+  [
+    "Урок 8: Урок 9. Операторы сравнения",
+    "/courses/js-30-days-ru?lesson=30"
+  ],
+  [
+    "Урок 9: Урок 10. Условное ветвление: if, '?'",
+    "/courses/js-30-days-ru?lesson=31"
+  ],
+  [
+    "Урок 2: Тема 1. Анализ данных с Pandas",
+    "/courses/ml?lesson=42"
+  ],
+  [
+    "Урок 3: Тема 2. Визуальный анализ данных",
+    "/courses/ml?lesson=43"
+  ],
+  [
+    "Урок 4: Тема 3. Деревья решений и метод ближайших соседей",
+    "/courses/ml?lesson=44"
+  ],
+  [
+    "Урок 5: Тема 4. Линейные модели классификации и регрессии",
+    "/courses/ml?lesson=45"
+  ],
+  [
+    "Урок 6: Тема 5. Композиции: бэггинг и случайный лес",
+    "/courses/ml?lesson=46"
+  ],
+  [
+    "Урок 7: Тема 6. Построение и отбор признаков",
+    "/courses/ml?lesson=47"
+  ],
+  [
+    "Урок 8: Тема 7. Обучение без учителя: PCA и кластеризация",
+    "/courses/ml?lesson=48"
+  ],
+  [
+    "Урок 9: Тема 8. Vowpal Wabbit: обучение на гигабайтах данных",
+    "/courses/ml?lesson=49"
+  ],
+  [
+    "Урок 10: Тема 9. Анализ временных рядов",
+    "/courses/ml?lesson=50"
+  ],
+  [
+    "Урок 11: Тема 10. Градиентный бустинг",
+    "/courses/ml?lesson=51"
+  ],
+  [
+    "Урок 0: День 1. Знакомство с Python",
+    "/courses/python-100-days-ru?lesson=12"
+  ],
+  [
+    "Урок 1: День 2. Элемент языка",
+    "/courses/python-100-days-ru?lesson=13"
+  ],
+  [
+    "Урок 2: День 3. Условные операторы",
+    "/courses/python-100-days-ru?lesson=14"
+  ],
+  [
+    "Урок 3: День 4. Циклическая структура",
+    "/courses/python-100-days-ru?lesson=15"
+  ],
+  [
+    "Урок 4: День 5. Программная логика",
+    "/courses/python-100-days-ru?lesson=16"
+  ],
+  [
+    "Урок 5: День 6. Использование функций и модулей",
+    "/courses/python-100-days-ru?lesson=17"
+  ],
+  [
+    "Урок 6: День 7. Строки и общие структуры данных",
+    "/courses/python-100-days-ru?lesson=18"
+  ],
+  [
+    "Урок 7: День 8. Основы объектно-ориентированного программирования",
+    "/courses/python-100-days-ru?lesson=19"
+  ],
+  [
+    "Урок 8: День 9. Продвинутое объектно-ориентированное программирование",
+    "/courses/python-100-days-ru?lesson=20"
+  ],
+  [
+    "Урок 9: День 10. Графический пользовательский интерфейс и разработка игр",
+    "/courses/python-100-days-ru?lesson=21"
+  ],
+  [
+    "Урок 0: Урок 1. Введение в React",
+    "/courses/react-30-days-ru?lesson=52"
+  ],
+  [
+    "Урок 1: Урок 2. JSX: Разметка в JavaScript",
+    "/courses/react-30-days-ru?lesson=53"
+  ],
+  [
+    "Урок 2: Урок 3. Компоненты и Пропсы",
+    "/courses/react-30-days-ru?lesson=54"
+  ],
+  [
+    "Урок 3: Урок 4. Состояние (State) компонента",
+    "/courses/react-30-days-ru?lesson=55"
+  ],
+  [
+    "Урок 4: Урок 5. Обработка событий",
+    "/courses/react-30-days-ru?lesson=56"
+  ],
+  [
+    "Урок 5: Урок 6. Условный рендеринг",
+    "/courses/react-30-days-ru?lesson=57"
+  ],
+  [
+    "Урок 6: Урок 7. Рендеринг списков",
+    "/courses/react-30-days-ru?lesson=58"
+  ],
+  [
+    "Урок 7: Урок 8. Хук useEffect",
+    "/courses/react-30-days-ru?lesson=59"
+  ],
+  [
+    "Урок 8: Урок 9. Формы и управляемые компоненты",
+    "/courses/react-30-days-ru?lesson=60"
+  ],
+  [
+    "Урок 9: Урок 10. Маршрутизация (React Router)",
+    "/courses/react-30-days-ru?lesson=61"
+  ],
+  [
+    "Урок 1: Основы SQL",
+    "/courses/sql?lesson=8"
+  ],
+  [
+    "Урок 1: HTML и CSS",
+    "/courses/webdev?lesson=6"
+  ],
+  [
+    "Урок 2: JavaScript — основы",
+    "/courses/webdev?lesson=7"
+  ],
+  [
+    "Конструктор курсов",
+    "/builder/courses"
+  ]
+]

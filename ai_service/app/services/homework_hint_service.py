@@ -5,6 +5,7 @@ import logging
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.models.homework import Homework, HomeworkAssignment
+from app.services.hint_filter import filter_homework_hint
 from app.services.homework_template_service import parse_content
 from app.services.llm_service import get_llm
 
@@ -92,5 +93,8 @@ def generate_homework_hint(
         HumanMessage(content=user),
     ]
     raw = llm.invoke(messages).content.strip()
-    logger.info("Homework hint assignment=%s len=%s", assignment.id, len(raw))
-    return raw
+    filtered = filter_homework_hint(raw)
+    if filtered != raw:
+        logger.warning("Homework hint filtered assignment=%s", assignment.id)
+    logger.info("Homework hint assignment=%s len=%s", assignment.id, len(filtered))
+    return filtered

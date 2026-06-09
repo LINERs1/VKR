@@ -3,6 +3,7 @@ backend/.venv/
 **/__pycache__/
 **/*.pyc
 backend/.env
+ai_service/.env
 # app.db and chroma_db are intentionally pushed so the reviewer has pre-seeded RAG data
 docker/compose.env
 backend/scripts/.tunnel.pid
@@ -27,4 +28,5 @@ Thumbs.db
 frontend/src/components/*.py
 frontend/src/components/*.script.txt
 frontend/src/debugger.js
-*/.venv/
+**/.venv/
+.venv/

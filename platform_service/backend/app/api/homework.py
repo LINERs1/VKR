@@ -1,9 +1,10 @@
 import json
 import time
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy import or_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session  # noqa: F401 — used in type hints
 
 from app.database import get_db, SessionLocal
 from app.models.homework import Homework, HomeworkAssignment, HomeworkStatus
@@ -22,15 +23,31 @@ from app.schemas.homework import (
     JournalSummaryResponse,
 )
 from app.schemas.homework_template import HomeworkTemplateContent, QuizItem
+from app.config import settings
+from app.models.assistant_metric import AssistantMetric
+from app.services.ai_homework_client import request_homework_review
 from app.services.auth_service import get_current_user
 from app.services.homework_hint_service import generate_homework_hint
 from app.services.homework_journal_service import build_journal_summary, build_reminders
-from app.services.homework_review_service import review_assignment
 from app.services.homework_template_service import parse_content
 from app.services.weak_topics_service import record_quiz_weak_topics
 from app.services.metrics_service import record_metric
 
 router = APIRouter()
+
+
+def _count_recent_ai_reviews(db: Session, teacher_id: int) -> int:
+    since = datetime.utcnow() - timedelta(hours=1)
+    return (
+        db.query(AssistantMetric)
+        .filter(
+            AssistantMetric.user_id == teacher_id,
+            AssistantMetric.event_type == "ai_homework_review",
+            AssistantMetric.created_at >= since,
+            AssistantMetric.success == 1,
+        )
+        .count()
+    )
 
 
 def _sanitize_content_for_student(content: HomeworkTemplateContent) -> HomeworkTemplateContent:
@@ -255,6 +272,25 @@ def homework_hint(
     if assignment.status != HomeworkStatus.pending.value:
         raise HTTPException(status_code=400, detail="Подсказки доступны только до сдачи работы")
 
+    hint_count = assignment.hint_count or 0
+    if hint_count >= settings.HOMEWORK_HINT_MAX:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Лимит подсказок ({settings.HOMEWORK_HINT_MAX}) исчерпан для этого задания",
+        )
+    if assignment.last_hint_at:
+        try:
+            last_hint = datetime.fromisoformat(assignment.last_hint_at)
+            elapsed = (datetime.utcnow() - last_hint).total_seconds()
+            if elapsed < settings.HOMEWORK_HINT_COOLDOWN_SEC:
+                wait = int(settings.HOMEWORK_HINT_COOLDOWN_SEC - elapsed)
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"Подождите {wait} сек. перед следующей подсказкой",
+                )
+        except ValueError:
+            pass
+
     t0 = time.perf_counter()
     try:
         hint = generate_homework_hint(
@@ -286,6 +322,10 @@ def homework_hint(
             status_code=503,
             detail=f"ИИ недоступен: {e}. Убедитесь, что Ollama запущена.",
         ) from e
+
+    assignment.hint_count = hint_count + 1
+    assignment.last_hint_at = datetime.utcnow().isoformat()
+    db.commit()
     return HomeworkHintResponse(hint=hint)
 
 
@@ -340,9 +380,18 @@ def ai_review_homework(
     if assignment.status not in (HomeworkStatus.submitted.value, HomeworkStatus.graded.value):
         raise HTTPException(status_code=400, detail="Nothing submitted yet")
 
+    if assignment.ai_review_json and assignment.status == HomeworkStatus.submitted.value:
+        return HomeworkAiReviewResponse(**json.loads(assignment.ai_review_json))
+
+    if _count_recent_ai_reviews(db, current_user.id) >= settings.HOMEWORK_AI_REVIEW_MAX_PER_HOUR:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Лимит ИИ-проверок ({settings.HOMEWORK_AI_REVIEW_MAX_PER_HOUR} в час) исчерпан",
+        )
+
     t0 = time.perf_counter()
     try:
-        result = review_assignment(assignment.homework, assignment)
+        result = request_homework_review(assignment.homework, assignment)
         record_metric(
             db,
             event_type="ai_homework_review",
@@ -363,7 +412,7 @@ def ai_review_homework(
         )
         raise HTTPException(
             status_code=503,
-            detail=f"ИИ недоступен: {e}. Убедитесь, что Ollama запущена.",
+            detail=f"ИИ-сервис недоступен: {e}",
         ) from e
 
     assignment.ai_review_json = json.dumps(result, ensure_ascii=False)
@@ -389,7 +438,7 @@ def mass_review_task(assignment_ids: list[int], teacher_id: int):
 
             t0 = time.perf_counter()
             try:
-                result = review_assignment(assignment.homework, assignment)
+                result = request_homework_review(assignment.homework, assignment)
                 record_metric(
                     db,
                     event_type="ai_homework_review",

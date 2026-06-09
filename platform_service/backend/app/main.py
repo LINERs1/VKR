@@ -29,6 +29,8 @@ def _migrate_sqlite_columns():
         "ALTER TABLE homeworks ADD COLUMN is_demo INTEGER DEFAULT 0",
         "ALTER TABLE homework_assignments ADD COLUMN student_quiz_json TEXT",
         "ALTER TABLE homework_assignments ADD COLUMN ai_review_json TEXT",
+        "ALTER TABLE homework_assignments ADD COLUMN hint_count INTEGER DEFAULT 0",
+        "ALTER TABLE homework_assignments ADD COLUMN last_hint_at TEXT",
         "ALTER TABLE users ADD COLUMN settings_json TEXT",
     ]
     with engine.connect() as conn:

@@ -8,6 +8,7 @@ services:
     environment:
       - PORT=8001
       - AI_SERVICE_URL=http://ai_service:8000
+      - SERVICE_API_KEY=${SERVICE_API_KEY:-}
     env_file:
       - ./platform_service/backend/.env
     volumes:
@@ -20,6 +21,7 @@ services:
     environment:
       - PLATFORM_SERVICE_URL=http://platform_backend:8001
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - SERVICE_API_KEY=${SERVICE_API_KEY:-}
     env_file:
       - ./ai_service/.env
     volumes:
@@ -29,8 +31,9 @@ services:
       - "host.docker.internal:host-gateway"
 
   frontend:
-    build: ./platform_service/frontend
+    build: ./frontend
     ports:
       - "80:80"
     depends_on:
       - platform_backend
+      - ai_service

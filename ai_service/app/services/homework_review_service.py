@@ -75,13 +75,13 @@ def _load_reference_tests() -> str:
     return ""
 
 
-def _quiz_review_block(homework: Homework, assignment: HomeworkAssignment) -> str:
-    if not homework.content_json:
+def _quiz_review_block_raw(content_json: str | None, student_quiz: dict | None) -> str:
+    if not content_json:
         return ""
-    raw_items = parse_content(homework.content_json).get("quiz_items") or []
+    raw_items = parse_content(content_json).get("quiz_items") or []
     if not raw_items:
         return ""
-    answers = assignment.student_quiz or {}
+    answers = student_quiz or {}
     lines: list[str] = ["---", "ТЕСТЫ С ВАРИАНТАМИ (эталон и ответы ученика):"]
     for i, q in enumerate(raw_items):
         if not isinstance(q, dict):
@@ -112,29 +112,43 @@ def _quiz_review_block(homework: Homework, assignment: HomeworkAssignment) -> st
     return "\n".join(lines)
 
 
-def review_assignment(homework: Homework, assignment: HomeworkAssignment) -> dict:
+def _quiz_review_block(homework: Homework, assignment: HomeworkAssignment) -> str:
+    return _quiz_review_block_raw(homework.content_json, assignment.student_quiz)
+
+
+def review_assignment_raw(
+    *,
+    assignment_id: int,
+    username: str,
+    homework_description: str,
+    student_code: str = "",
+    student_text: str = "",
+    content_json: str = "",
+    student_quiz: dict | None = None,
+    is_demo: bool = False,
+) -> dict:
     tests_section = ""
-    if getattr(homework, "is_demo", False):
+    if is_demo:
         tests_block = _load_reference_tests()
         if tests_block:
             tests_section = (
                 f"\n\nЭТАЛОННЫЕ АВТОТЕСТЫ (pytest):\n```python\n{tests_block}\n```\n"
             )
 
-    quiz_section = _quiz_review_block(homework, assignment)
+    quiz_section = _quiz_review_block_raw(content_json or None, student_quiz)
 
     user_prompt = f"""ЗАДАНИЕ:
-{homework.description[:HOMEWORK_REVIEW_TEXT_LIMIT]}
+{homework_description[:HOMEWORK_REVIEW_TEXT_LIMIT]}
 
 ---
-КОД УЧЕНИКА ({assignment.student.username}):
+КОД УЧЕНИКА ({username}):
 ```python
-{assignment.student_code or '(не сдан)'}
+{student_code or '(не сдан)'}
 ```
 
 ---
 ПИСЬМЕННАЯ ЧАСТЬ:
-{assignment.student_text or '(не сдана)'}
+{student_text or '(не сдана)'}
 {quiz_section}
 {tests_section}
 """
@@ -158,7 +172,7 @@ def review_assignment(homework: Homework, assignment: HomeworkAssignment) -> dic
 
     logger.info(
         "AI homework review assignment %s grade=%s fragments=%s",
-        assignment.id,
+        assignment_id,
         suggested_grade,
         len(error_fragments),
     )
@@ -167,3 +181,16 @@ def review_assignment(homework: Homework, assignment: HomeworkAssignment) -> dic
         "suggested_grade": suggested_grade,
         "error_fragments": error_fragments,
     }
+
+
+def review_assignment(homework: Homework, assignment: HomeworkAssignment) -> dict:
+    return review_assignment_raw(
+        assignment_id=assignment.id,
+        username=assignment.student.username,
+        homework_description=homework.description,
+        student_code=assignment.student_code or "",
+        student_text=assignment.student_text or "",
+        content_json=homework.content_json or "",
+        student_quiz=assignment.student_quiz,
+        is_demo=bool(getattr(homework, "is_demo", False)),
+    )

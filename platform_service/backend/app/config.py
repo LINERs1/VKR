@@ -81,6 +81,13 @@ class Settings(BaseSettings):
     # =========================================================
     # URL ИИ-сервиса — платформа отправляет сюда Webhooks и запрашивает joinUrl
     AI_SERVICE_URL: str = "http://localhost:8000"
+    # Общий секрет платформа ↔ ИИ (webhooks, проверка ДЗ)
+    SERVICE_API_KEY: str = ""
+
+    # Лимиты ДЗ
+    HOMEWORK_HINT_MAX: int = 10
+    HOMEWORK_HINT_COOLDOWN_SEC: int = 30
+    HOMEWORK_AI_REVIEW_MAX_PER_HOUR: int = 30
 
     @cached_property
     def cors_origins(self) -> List[str]:

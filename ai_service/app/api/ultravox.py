@@ -20,11 +20,14 @@ from app.database import get_db
 from app.services.auth_service import get_current_user
 from app.models.user import User
 from app.models.mirror import CourseRef, LessonRef
-from app.services.rag_service import get_retriever, format_docs
+from app.services.rag_service import retrieve_course_docs, format_docs, _collection_doc_count
 from app.services.homework_journal_service import build_journal_summary, build_reminders
 from app.services.weak_topics_service import build_weak_topics_prompt_block
 from app.utils.navigation_prompt import build_navigation_prompt, build_db_navigation_routes_list
 from app.utils.role_capabilities import build_role_capabilities_prompt
+from app.services.ultravox_tools import build_voice_tools
+from app.services.permissions import resolve_permissions
+from app.services.audit_service import record_audit
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -45,6 +48,11 @@ class CourseNavItem(BaseModel):
     icon: str = ""
 
 
+class BreadcrumbItem(BaseModel):
+    label: str
+    path: str = ""
+
+
 class CreateCallRequest(BaseModel):
     session_id: Optional[str] = None
     course_id: Optional[str] = "default"
@@ -52,8 +60,11 @@ class CreateCallRequest(BaseModel):
     current_page: Optional[str] = "Главная"
     current_path: Optional[str] = "/"
     page_content: Optional[str] = ""
+    breadcrumbs: Optional[List[BreadcrumbItem]] = None
     voice_id: Optional[str] = None
     available_courses: Optional[List[CourseNavItem]] = None
+    permissions: Optional[List[str]] = None
+    platform_user_id: Optional[str] = None
 
 
 class UpdateVoiceContextRequest(BaseModel):
@@ -63,6 +74,7 @@ class UpdateVoiceContextRequest(BaseModel):
     current_page: str = ""
     current_path: str = "/"
     page_content: str = ""
+    breadcrumbs: Optional[List[BreadcrumbItem]] = None
     lesson_id: Optional[str] = None
     lesson_title: Optional[str] = None
     lesson_index: Optional[int] = None
@@ -172,8 +184,16 @@ def _build_system_prompt(
     courses = _courses_for_prompt(req, db)
     courses_list = "\n".join([f"- {c['title']}" for c in courses])
 
+    from app.services.navigation_service import build_breadcrumbs_text
+
+    crumb_block = ""
+    if getattr(req, "breadcrumbs", None):
+        crumb_text = build_breadcrumbs_text([b.model_dump() for b in req.breadcrumbs])
+        if crumb_text:
+            crumb_block = f"- Путь: {crumb_text}\n"
+
     page_info_lines = [
-        f"### НАВИГАЦИЯ\nТЕКУЩЕЕ МЕСТОПОЛОЖЕНИЕ ПОЛЬЗОВАТЕЛЯ:\n- Страница: {req.current_page or 'Неизвестно'}\n- URL: {req.current_path or '/'}\n\nСПИСОК КУРСОВ:\n{courses_list}\n"
+        f"### НАВИГАЦИЯ\nТЕКУЩЕЕ МЕСТОПОЛОЖЕНИЕ ПОЛЬЗОВАТЕЛЯ:\n- Страница: {req.current_page or 'Неизвестно'}\n- URL: {req.current_path or '/'}\n{crumb_block}\nСПИСОК КУРСОВ:\n{courses_list}\n"
     ]
     if req.page_content:
         page_info_lines.append(
@@ -224,6 +244,7 @@ def _build_system_prompt(
             "Если в контексте указано, что работа уже graded с оценкой — НЕ вызывай reviewHomework; "
             "озвучь оценку и отзыв из контекста экрана. "
             "Вызови reviewHomework только для работы в статусе submitted (ещё не оценена преподавателем). "
+            "Перед проверкой спроси подтверждение; при согласии вызови reviewHomework с confirm=true. "
             "Для сводки «кто не сдал», «средний балл», «кто ждёт проверки» — getTeacherSummary. "
             "Не читай вслух HTML-теги."
         )
@@ -342,6 +363,7 @@ async def create_ultravox_call(
         raise HTTPException(status_code=500, detail="ULTRAVOX_API_KEY not configured")
 
     session_id = req.session_id or str(uuid.uuid4())
+    granted = resolve_permissions(current_user.role, req.permissions)
     _save_voice_session(
         session_id,
         course_id=req.course_id or "default",
@@ -349,248 +371,16 @@ async def create_ultravox_call(
         current_page=req.current_page or "",
         current_path=req.current_path or "/",
         page_content=(req.page_content or "")[:1500],
+        user_id=current_user.id,
+        user_role=current_user.role,
+        permissions=list(granted),
+        platform_user_id=req.platform_user_id,
     )
 
     courses = _courses_for_prompt(req, db)
     system_prompt = _build_system_prompt(current_user, req, courses, db)
 
-    navigate_tool = {
-        "temporaryTool": {
-            "modelToolName": "navigatePage",
-            "description": (
-                "Переводит пользователя на страницу платформы (курс, журнал, профиль, главная, ДЗ). "
-                "ДЛЯ УРОКОВ НЕ ИСПОЛЬЗОВАТЬ! Для уроков используй openLesson. "
-                "ВНИМАНИЕ: Если пользователь просит открыть курс, которого нет в списке доступных, КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО переходить на другой курс или выдумывать пути. Просто скажи словами, что такого курса нет. "
-                "Сначала одной фразой по-русски скажи, куда переходишь («Открываю журнал»), затем вызови инструмент. "
-                "После вызова не повторяй переход и не комментируй смену экрана. "
-                "Не произноси navigate, NAVIGATE, path, URL или слэши."
-            ),
-            "dynamicParameters": [
-                {
-                    "name": "path",
-                    "location": "PARAMETER_LOCATION_BODY",
-                    "schema": {
-                        "description": "Точный маршрут из списка доступных. ЗАПРЕЩЕНО выдумывать маршруты самостоятельно.",
-                        "type": "string",
-                    },
-                    "required": True,
-                },
-            ],
-            "client": {},
-        }
-    }
-
-    open_lesson_tool = {
-        "temporaryTool": {
-            "modelToolName": "openLesson",
-            "description": (
-                "Открывает конкретный урок курса. "
-                "Используй ТОЛЬКО этот инструмент для перехода на уроки (вместо navigatePage). "
-                "Сначала скажи «Открываю урок», затем вызови инструмент."
-            ),
-            "dynamicParameters": [
-                {
-                    "name": "course_id",
-                    "location": "PARAMETER_LOCATION_BODY",
-                    "schema": {
-                        "description": "ID курса (например, 'python-100-days-ru', 'react-30-days-ru').",
-                        "type": "string",
-                    },
-                    "required": True,
-                },
-                {
-                    "name": "lesson_number",
-                    "location": "PARAMETER_LOCATION_BODY",
-                    "schema": {
-                        "description": "Порядковый номер урока (например, 1, 2, 5). Это не ID в базе данных, а именно номер урока по порядку.",
-                        "type": "integer",
-                    },
-                    "required": True,
-                },
-                {
-                    "name": "highlight_text",
-                    "location": "PARAMETER_LOCATION_BODY",
-                    "schema": {
-                        "description": "Кусок текста (от 1 до 5 слов), к которому нужно проскроллить и подсветить на странице.",
-                        "type": "string",
-                    },
-                    "required": False,
-                },
-            ],
-            "client": {},
-        }
-    }
-
-    page_context_tool = {
-        "temporaryTool": {
-            "modelToolName": "getPageContext",
-            "description": (
-                "Возвращает актуальное местоположение пользователя на сайте и текст, "
-                "который сейчас виден на экране. Вызывай после перехода на другую страницу "
-                "или если пользователь спрашивает «где я», «что на экране»."
-            ),
-            "client": {},
-        }
-    }
-
-    # RAG Tool — выполняется в браузере (client), без публичного HTTPS URL
-    rag_tool = {
-        "temporaryTool": {
-            "modelToolName": "queryKnowledgeBase",
-            "description": (
-                "Ищет информацию в материалах курса по смысловому сходству. "
-                "Используй этот инструмент, когда пользователь задаёт вопросы по теме курса, "
-                "просит объяснить тему или найти информацию в учебных материалах."
-            ),
-            "dynamicParameters": [
-                {
-                    "name": "query",
-                    "location": "PARAMETER_LOCATION_BODY",
-                    "schema": {
-                        "description": "Поисковый запрос для поиска в материалах курса",
-                        "type": "string"
-                    },
-                    "required": True
-                },
-            ],
-            "client": {},
-        }
-    }
-
-    selected_tools = [rag_tool, page_context_tool, navigate_tool, open_lesson_tool]
-    if current_user.role == "teacher":
-        selected_tools.append({
-            "temporaryTool": {
-                "modelToolName": "reviewHomework",
-                "description": (
-                    "Запускает автоматическую ИИ-проверку домашнего задания выбранного ученика. "
-                    "Только если работа сдана и ещё не оценена (submitted). "
-                    "Если работа уже оценена (graded) — не вызывай, ответь по данным на экране. "
-                    "Проверка на сервере может занять до нескольких минут: сразу скажи пользователю подождать, не называй это зависанием."
-                ),
-                "client": {},
-            }
-        })
-        selected_tools.append({
-            "temporaryTool": {
-                "modelToolName": "reviewAllHomeworks",
-                "description": (
-                    "Запускает массовую фоновую ИИ-проверку всех несданных домашних заданий, которые ещё не проверялись ИИ. "
-                    "Вызывай, если преподаватель просит «проверь все ДЗ», «запусти проверку всех заданий»."
-                ),
-                "client": {},
-            }
-        })
-        selected_tools.append({
-            "temporaryTool": {
-                "modelToolName": "getTeacherSummary",
-                "description": (
-                    "Сводка журнала: средний балл, кто не сдал ДЗ, что ждёт проверки, успеваемость по курсам. "
-                    "Вызывай на вопросы «кто не сдал», «средний балл», «что на проверке»."
-                ),
-                "client": {},
-            }
-        })
-        # Tool for filling homework form in Workshop (available on /homeworks/workshop/:id)
-        selected_tools.append({
-            "temporaryTool": {
-                "modelToolName": "fillHomeworkForm",
-                "description": (
-                    "Заполняет поля формы создания домашнего задания в Мастерской ДЗ. "
-                    "Вызывай когда преподаватель просит создать задание, написать описание, добавить тест, заполнить шаблон кода или письменную часть. "
-                    "Передавай только те поля, которые нужно заполнить."
-                ),
-                "dynamicParameters": [
-                    {
-                        "name": "title",
-                        "location": "PARAMETER_LOCATION_BODY",
-                        "schema": {
-                            "description": "Название домашнего задания",
-                            "type": "string"
-                        },
-                        "required": False,
-                    },
-                    {
-                        "name": "intro",
-                        "location": "PARAMETER_LOCATION_BODY",
-                        "schema": {
-                            "description": "Описание задания: что должен сделать ученик, критерии оценки",
-                            "type": "string"
-                        },
-                        "required": False,
-                    },
-                    {
-                        "name": "code_template",
-                        "location": "PARAMETER_LOCATION_BODY",
-                        "schema": {
-                            "description": "Шаблон кода с TODO-комментариями для заполнения учеником",
-                            "type": "string"
-                        },
-                        "required": False,
-                    },
-                    {
-                        "name": "written_part",
-                        "location": "PARAMETER_LOCATION_BODY",
-                        "schema": {
-                            "description": "Письменная часть: теоретические вопросы для ученика",
-                            "type": "string"
-                        },
-                        "required": False,
-                    },
-                    {
-                        "name": "quiz_items",
-                        "location": "PARAMETER_LOCATION_BODY",
-                        "schema": {
-                            "description": "Тестовые вопросы. Массив объектов: [{\"question\": \"...\", \"options\": [\"A\",\"B\",\"C\",\"D\"], \"correct_index\": 0}]",
-                            "type": "string"
-                        },
-                        "required": False,
-                    },
-                ],
-                "client": {},
-            }
-        })
-    else:
-        selected_tools.append({
-            "temporaryTool": {
-                "modelToolName": "getHomeworkReminders",
-                "description": (
-                    "Список несданных домашних заданий и работ на проверке у преподавателя. "
-                    "Вызывай, если ученик спрашивает «что мне сделать», «какие ДЗ остались»."
-                ),
-                "client": {},
-            }
-        })
-
-        selected_tools.append({
-            "temporaryTool": {
-                "modelToolName": "getHomeworkHint",
-                "description": (
-                    "Сократическая подсказка по текущему домашнему заданию без готового решения. "
-                    "Вызывай, если ученик просит подсказку, намёк или помощь с кодом на странице ДЗ."
-                ),
-                "client": {},
-            }
-        })
-
-    # Общие инструменты для всех пользователей
-    selected_tools.append({
-        "temporaryTool": {
-            "modelToolName": "getNotifications",
-            "description": (
-                "Получает список новых оповещений (уведомлений) пользователя. "
-                "Оповещения содержат ссылки (links), по которым можно перейти с помощью navigatePage."
-            ),
-            "client": {},
-        }
-    })
-    selected_tools.append({
-        "temporaryTool": {
-            "modelToolName": "clearNotifications",
-            "description": "Очищает (удаляет) все оповещения пользователя.",
-            "client": {},
-        }
-    })
+    selected_tools = build_voice_tools(current_user.role, granted)
 
     voice_id = req.voice_id or settings.ULTRAVOX_VOICE_ID or None
     voice_overrides = _build_voice_overrides(voice_id) if voice_id else None
@@ -633,10 +423,25 @@ async def create_ultravox_call(
         )
 
     data = resp.json()
+    record_audit(
+        db,
+        action="voice_call_started",
+        user_id=current_user.id,
+        session_id=session_id,
+        resource="ultravox",
+        success=True,
+        meta={
+            "role": current_user.role,
+            "permissions": sorted(granted),
+            "tools_count": len(selected_tools),
+            "path": req.current_path,
+        },
+    )
     return {
         "joinUrl": data.get("joinUrl"),
         "callId": data.get("callId"),
         "sessionId": session_id,
+        "granted_permissions": sorted(granted),
     }
 
 
@@ -685,30 +490,49 @@ async def rag_query(req: RagQueryRequest, db: Session = Depends(get_db)):
     try:
         course_id = _resolve_course_id(req.session_id, req.course_id)
         if course_id == "default" or not course_id:
-            return {"results": "Информация по данному запросу не найдена в материалах курса."}
+            return {
+                "results": "Информация по данному запросу не найдена: откройте курс или укажите course_id.",
+                "indexed_chunks": 0,
+            }
 
-        retriever = get_retriever(course_id)
-        docs = await retriever.ainvoke(req.query)
+        indexed = _collection_doc_count(course_id)
+        docs = await retrieve_course_docs(course_id, req.query)
         context = format_docs(docs, db)
 
         if not context.strip() or "(материалы курса не найдены)" in context:
-            return {"results": "Информация по данному запросу не найдена в материалах курса."}
+            hint = (
+                f" В индексе курса «{course_id}» сейчас {indexed} фрагментов. "
+                "Если 0 — платформа должна отправить webhooks уроков или запустить sync_all_to_ai.py."
+            )
+            return {
+                "results": "Информация по данному запросу не найдена в материалах курса." + hint,
+                "indexed_chunks": indexed,
+            }
 
-        # Extract vpath from the first doc that has it
-        import re
-        vpath_match = re.search(r'Маршрут:\s*([^\s\]]+)', context)
-        vpath = vpath_match.group(1) if vpath_match else None
+        import json
 
-        # Build instruction for the LLM
+        from app.services.highlight_service import extract_highlight_quote
+        from app.services.rag_service import parse_lesson_id_from_source
+
+        vpath = None
+        highlight_quote = ""
+        if docs:
+            first = docs[0]
+            source = first.metadata.get("source", "")
+            cid = first.metadata.get("course_id")
+            if source.startswith("lesson_") and cid:
+                lesson_id = parse_lesson_id_from_source(source, cid)
+                if lesson_id is not None:
+                    vpath = f"/courses/{cid}?lesson={lesson_id}"
+            highlight_quote = extract_highlight_quote(first.page_content, query=req.query)
+
         nav_instruction = ""
         if vpath:
-            # Check user settings for highlight trigger word
             trigger_word = ""
             if req.session_id and req.session_id in _voice_sessions:
                 uid = _voice_sessions[req.session_id].get("user_id")
                 if uid:
                     from app.models.user import User
-                    import json
                     u = db.query(User).filter(User.id == uid).first()
                     if u and u.settings_json:
                         try:
@@ -717,20 +541,36 @@ async def rag_query(req: RagQueryRequest, db: Session = Depends(get_db)):
                         except Exception:
                             pass
 
-            # Find first meaningful phrase from doc content
-            content_lines = [l for l in context.split('\n') if l.strip() and not l.startswith('[')]
-            highlight_candidate = ' '.join(content_lines[0].split()[:6]) if content_lines else ''
-            
-            trigger_condition = f"ТОЛЬКО ЕСЛИ пользователь использовал в своем запросе слово '{trigger_word}'" if trigger_word else "в любом случае"
-            
+            trigger_condition = (
+                f"ТОЛЬКО ЕСЛИ пользователь явно просил найти/показать фрагмент"
+                + (f" или использовал слово «{trigger_word}»" if trigger_word else "")
+            )
+            highlight_part = ""
+            if highlight_quote:
+                highlight_part = (
+                    f" При переходе передай highlight_text='{highlight_quote}' "
+                    f"(это точная цитата из материала, не меняй её), {trigger_condition}."
+                )
+            else:
+                highlight_part = " Не передавай highlight_text — цитата не найдена в чанке."
+
             nav_instruction = (
                 f"\n\n[ИНСТРУКЦИЯ ДЛЯ ИИ]: Информация найдена. "
-                f"НЕМЕДЛЕННО вызови инструмент navigatePage с path='{vpath}'. "
-                f"Обязательно передай параметр highlight_text='{highlight_candidate}', {trigger_condition}. "
-                f"Только после вызова инструмента — кратко ответь пользователю вслух по найденному тексту ниже."
+                f"Переходи на урок ТОЛЬКО если пользователь явно просил найти/показать на странице; "
+                f"иначе ответь вслух без навигации. "
+                f"Если переход нужен — вызови openLesson или navigatePage с path='{vpath}'."
+                f"{highlight_part} "
+                f"Кратко ответь по найденному тексту ниже."
             )
 
-        return {"results": context + nav_instruction}
+        return {
+            "results": context + nav_instruction,
+            "vpath": vpath,
+            "highlight_text": highlight_quote or None,
+            "course_id": course_id,
+            "indexed_chunks": indexed,
+            "sources_found": len(docs),
+        }
 
     except Exception as e:
         logger.error(f"RAG query error: {e}")
