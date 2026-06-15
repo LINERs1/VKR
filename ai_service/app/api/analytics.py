@@ -1,14 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+from typing import Any
 
 from app.database import get_db
-from app.models.user import User, UserRole
-from app.schemas.adaptive import (
+from app.schemas.analytics import (
     AnalyticsEventIn,
     AnalyticsSummaryResponse,
     DetailedAnalyticsResponse,
 )
-from app.services.auth_service import get_current_user, get_current_user_optional
+from app.services.auth_service import get_current_user, get_current_user_optional, DummyUser
 from app.services.metrics_service import (
     build_analytics_summary,
     build_detailed_analytics,
@@ -22,7 +22,7 @@ router = APIRouter()
 def post_analytics_event(
     body: AnalyticsEventIn,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user_optional),
+    current_user: Any = Depends(get_current_user_optional),
 ):
     record_metric(
         db,
@@ -40,9 +40,9 @@ def post_analytics_event(
 def analytics_summary(
     days: int = 7,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: DummyUser = Depends(get_current_user),
 ):
-    if current_user.role != UserRole.teacher.value:
+    if current_user.role not in ("teacher", "admin"):
         raise HTTPException(status_code=403, detail="Only teachers can view analytics")
     data = build_analytics_summary(db, days=days)
     return AnalyticsSummaryResponse(**data)
@@ -52,8 +52,8 @@ def analytics_summary(
 def analytics_detailed(
     days: int = 30,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: DummyUser = Depends(get_current_user),
 ):
-    if current_user.role != UserRole.teacher.value:
+    if current_user.role not in ("teacher", "admin"):
         raise HTTPException(status_code=403, detail="Only teachers can view analytics")
     return build_detailed_analytics(db, days=days)

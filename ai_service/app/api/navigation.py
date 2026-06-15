@@ -7,14 +7,13 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.models.navigation import NavNode, NavEdge
 
-from app.services.highlight_service import validate_highlight
-from app.services.audit_service import record_audit
 from app.services.navigation_service import (
     CourseNavItem,
     build_breadcrumbs_text,
@@ -53,6 +52,13 @@ class AdjacentLessonRequest(BaseModel):
     fetch_from_platform: bool = False
 
 
+class CustomNodeInput(BaseModel):
+    identifier: str
+    title: str
+    description: Optional[str] = ""
+    allowed_roles: list[str] = ["student", "teacher", "admin"]
+
+
 async def _courses_from_request(
     courses: list[CourseInput] | None,
     fetch_from_platform: bool,
@@ -77,21 +83,23 @@ def _resolve_response(res) -> dict[str, Any]:
 
 
 @router.post("/resolve")
-async def resolve_navigation(req: ResolveRequest):
+async def resolve_navigation(req: ResolveRequest, db: Session = Depends(get_db)):
     """
     Резолвит путь или фразу («python за 100 дней») в маршрут платформы.
     status: ok | ambiguous | not_found | static
     """
     items = await _courses_from_request(req.courses, req.fetch_from_platform)
-    res = resolve_path_or_query(req.path_or_query, items)
+    custom_nodes = {n.identifier for n in db.query(NavNode).filter(NavNode.node_type == "page").all()}
+    res = resolve_path_or_query(req.path_or_query, items, custom_paths=custom_nodes)
     return _resolve_response(res)
 
 
 @router.post("/validate")
-async def validate_navigation(req: ResolveRequest):
+async def validate_navigation(req: ResolveRequest, db: Session = Depends(get_db)):
     """Проверка [NAVIGATE:...] из текстового чата перед action на виджете."""
     items = await _courses_from_request(req.courses, req.fetch_from_platform)
-    res = validate_navigate_path(req.path_or_query, items)
+    custom_nodes = {n.identifier for n in db.query(NavNode).filter(NavNode.node_type == "page").all()}
+    res = validate_navigate_path(req.path_or_query, items, custom_paths=custom_nodes)
     out = _resolve_response(res)
     if res.status == "ambiguous":
         out["action"] = "show_courses"
@@ -128,27 +136,110 @@ async def navigation_sync_status():
     }
 
 
-class ValidateHighlightRequest(BaseModel):
-    highlight_text: str
-    page_content: str = ""
-
-
-@router.post("/validate-highlight")
-async def validate_highlight_text(req: ValidateHighlightRequest, db: Session = Depends(get_db)):
-    """Санитизация highlight_text и проверка наличия фрагмента в контенте страницы."""
-    result = validate_highlight(req.highlight_text, req.page_content)
-    record_audit(
-        db,
-        action="highlight_validate",
-        resource=req.highlight_text[:80] if req.highlight_text else None,
-        success=result["valid"],
-        meta={"message": result.get("message"), "sanitized": result.get("sanitized")},
-    )
-    return result
-
-
 @router.post("/breadcrumbs/format")
 async def format_breadcrumbs(breadcrumbs: list[BreadcrumbInput]):
     """Форматирует хлебные крошки для промпта (отладка / виджет)."""
     text = build_breadcrumbs_text([b.model_dump() for b in breadcrumbs])
     return {"text": text}
+
+
+@router.get("/custom-nodes")
+def get_custom_nodes(response: Response, db: Session = Depends(get_db)):
+    """Получает список кастомных статических страниц (node_type='page')."""
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    nodes = db.query(NavNode).filter(NavNode.node_type == "page").all()
+    return [{
+        "id": n.id,
+        "identifier": n.identifier,
+        "title": n.title,
+        "description": n.description,
+        "allowed_roles": [r.allowed_role for r in n.access_rules] if n.access_rules else ["student", "teacher", "admin"]
+    } for n in nodes if not str(n.identifier).startswith("/courses/")]
+
+@router.get("/dynamic-nodes")
+def get_dynamic_nodes(response: Response, db: Session = Depends(get_db)):
+    """Получает список динамических узлов графа (курсы, уроки, действия)."""
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    nodes = db.query(NavNode).all()
+    return [{
+        "id": n.id,
+        "identifier": n.identifier,
+        "title": n.title,
+        "description": n.description,
+        "type": "action" if n.node_type == "action" else ("lesson" if "?lesson=" in str(n.identifier) else "course")
+    } for n in nodes if str(n.identifier).startswith("/courses/") or n.node_type == "action"]
+
+
+@router.post("/custom-nodes")
+def create_custom_node(node_in: CustomNodeInput, db: Session = Depends(get_db)):
+    """Создает новый кастомный маршрут и привязывает его к Главной (/)."""
+    existing = db.query(NavNode).filter(NavNode.identifier == node_in.identifier).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Маршрут с таким URL уже существует")
+
+    new_node = NavNode(
+        identifier=node_in.identifier,
+        title=node_in.title,
+        description=node_in.description,
+        node_type="page"
+    )
+    db.add(new_node)
+    db.flush()
+    
+    # Добавляем права доступа
+    from app.models.navigation import NodeAccessRule
+    for role in node_in.allowed_roles:
+        db.add(NodeAccessRule(nav_node_id=new_node.id, allowed_role=role))
+    db.flush()
+
+    home_node = db.query(NavNode).filter(NavNode.identifier == "/").first()
+    if home_node:
+        db.add(NavEdge(source_node_id=home_node.id, target_node_id=new_node.id))
+        db.add(NavEdge(source_node_id=new_node.id, target_node_id=home_node.id))
+
+    db.commit()
+    return {"status": "ok", "id": new_node.id}
+
+
+@router.delete("/custom-nodes/{node_id}")
+def delete_custom_node(node_id: int, db: Session = Depends(get_db)):
+    """Удаляет маршрут по ID."""
+    node = db.query(NavNode).filter(NavNode.id == node_id).first()
+    if not node:
+        raise HTTPException(status_code=404, detail="Маршрут не найден")
+    if node.identifier == "/":
+        raise HTTPException(status_code=400, detail="Нельзя удалить главную страницу")
+        
+    db.delete(node)
+    db.commit()
+    return {"status": "ok"}
+
+
+@router.put("/custom-nodes/{node_id}")
+def update_custom_node(node_id: int, node_in: CustomNodeInput, db: Session = Depends(get_db)):
+    """Редактирует существующий кастомный маршрут."""
+    node = db.query(NavNode).filter(NavNode.id == node_id).first()
+    if not node:
+        raise HTTPException(status_code=404, detail="Маршрут не найден")
+    
+    if node.identifier == "/" and node_in.identifier != "/":
+        raise HTTPException(status_code=400, detail="Нельзя изменить URL главной страницы")
+
+    # Проверка уникальности нового identifier, если он изменился
+    if node.identifier != node_in.identifier:
+        existing = db.query(NavNode).filter(NavNode.identifier == node_in.identifier).first()
+        if existing:
+            raise HTTPException(status_code=400, detail="Маршрут с таким URL уже существует")
+
+    node.identifier = node_in.identifier
+    node.title = node_in.title
+    node.description = node_in.description
+    
+    from app.models.navigation import NodeAccessRule
+    # Удаляем старые правила и создаем новые
+    db.query(NodeAccessRule).filter(NodeAccessRule.nav_node_id == node.id).delete()
+    for role in node_in.allowed_roles:
+        db.add(NodeAccessRule(nav_node_id=node.id, allowed_role=role))
+
+    db.commit()
+    return {"status": "ok"}

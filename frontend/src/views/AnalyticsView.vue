@@ -20,7 +20,7 @@ Chart.register(
 )
 
 const router = useRouter()
-const { fetchUser } = useAuth()
+const { fetchUser, hasAccess } = useAuth()
 
 const data = ref(null)
 const loading = ref(true)
@@ -33,7 +33,6 @@ const activityChartRef = ref(null)
 const perfChartRef = ref(null)
 const hwChartRef = ref(null)
 const gradeChartRef = ref(null)
-const weakTopicsChartRef = ref(null)
 const studentActivityChartRef = ref(null)
 
 let charts = {}
@@ -121,7 +120,7 @@ async function renderCharts() {
             pointHoverRadius: 5,
           },
           {
-            label: 'Запросы к чату',
+            label: 'Голосовые RAG-запросы',
             data: d.daily_events.map(x => x.chat),
             borderColor: c.emerald,
             backgroundColor: 'transparent',
@@ -158,7 +157,7 @@ async function renderCharts() {
         labels,
         datasets: [
           {
-            label: 'LLM (мс)',
+            label: 'Голосовая сессия (мс)',
             data: d.perf_by_day.map(x => x.llm_avg_ms),
             borderColor: c.indigo,
             backgroundColor: c.indigoBg,
@@ -168,7 +167,7 @@ async function renderCharts() {
             pointRadius: 3,
           },
           {
-            label: 'RAG (мс)',
+            label: 'Голосовой RAG (мс)',
             data: d.perf_by_day.map(x => x.rag_avg_ms),
             borderColor: c.emerald,
             backgroundColor: 'transparent',
@@ -257,50 +256,6 @@ async function renderCharts() {
 
   // ── Tab: students ───────────────────────────────────────────
   if (activeTab.value === 'students') {
-    if (weakTopicsChartRef.value && d.weak_topics.length > 0) {
-      destroyChart('weakTopics')
-      charts.weakTopics = new Chart(weakTopicsChartRef.value, {
-        type: 'bar',
-        data: {
-          labels: d.weak_topics.map(t => t.topic.length > 22 ? t.topic.slice(0, 20) + '…' : t.topic),
-          datasets: [
-            {
-              label: 'Всего ошибок',
-              data: d.weak_topics.map(t => t.total_wrong),
-              backgroundColor: c.rose,
-              borderRadius: 4,
-            },
-            {
-              label: 'Студентов',
-              data: d.weak_topics.map(t => t.students_count),
-              backgroundColor: c.amber,
-              borderRadius: 4,
-            },
-          ],
-        },
-        options: {
-          indexAxis: 'y',
-          responsive: true,
-          maintainAspectRatio: false,
-          scales: {
-            x: {
-              beginAtZero: true,
-              grid: { color: c.grid },
-              ticks: { color: c.tick, stepSize: 1 },
-            },
-            y: {
-              grid: { display: false },
-              ticks: { color: '#8b8b9e', font: { size: 12 } },
-            },
-          },
-          plugins: {
-            legend: { labels: { color: '#8b8b9e' } },
-            tooltip: { mode: 'index' },
-          },
-        },
-      })
-    }
-
     if (studentActivityChartRef.value && d.student_activity.length > 0) {
       destroyChart('studentActivity')
       const top10 = d.student_activity.slice(0, 10)
@@ -309,7 +264,7 @@ async function renderCharts() {
         data: {
           labels: top10.map(s => s.username),
           datasets: [{
-            label: 'Сообщений к ИИ',
+            label: 'Действий с голосовым ИИ',
             data: top10.map(s => s.message_count),
             backgroundColor: top10.map((_, i) => i === 0 ? c.indigo : i === 1 ? 'rgba(99,102,241,0.65)' : 'rgba(99,102,241,0.4)'),
             borderRadius: 5,
@@ -380,7 +335,7 @@ watch(periodDays, () => loadData())
 
 onMounted(async () => {
   const user = await fetchUser()
-  if (!user || user.role !== 'teacher') {
+  if (!user || !hasAccess('/analytics')) {
     router.push('/homeworks')
     return
   }
@@ -445,7 +400,7 @@ onMounted(async () => {
           <div class="kpi-sub">за {{ data.period_days }} дней</div>
         </div>
         <div class="kpi-card">
-          <div class="kpi-label">Запросов к чату</div>
+          <div class="kpi-label">RAG-запросы (голос)</div>
           <div class="kpi-value">{{ data.summary.total_chat_queries.toLocaleString() }}</div>
           <div class="kpi-sub">RAG-поисков</div>
         </div>
@@ -503,7 +458,7 @@ onMounted(async () => {
         <div class="chart-block full">
           <div class="chart-header">
             <div class="chart-title">Активность ИИ по дням</div>
-            <div class="chart-desc">Количество событий: чат, голосовая навигация, суммарно</div>
+            <div class="chart-desc">Количество событий: RAG-запросы, голосовая навигация, суммарно</div>
           </div>
           <div class="chart-area h300">
             <canvas ref="activityChartRef"></canvas>
@@ -518,7 +473,7 @@ onMounted(async () => {
               </svg>
             </div>
             <div class="mt-content">
-              <div class="mt-label">RAG-поиск (среднее)</div>
+              <div class="mt-label">Голосовой RAG (среднее)</div>
               <div class="mt-value">{{ fmtMs(data.summary && data.perf_by_day && data.perf_by_day.reduce((a, x) => x.rag_avg_ms ? [...a, x.rag_avg_ms] : a, []).length ? data.perf_by_day.reduce((a, x) => x.rag_avg_ms ? [...a, x.rag_avg_ms] : a, []).reduce((s, v) => s + v, 0) / data.perf_by_day.reduce((a, x) => x.rag_avg_ms ? [...a, x.rag_avg_ms] : a, []).length : null) }}</div>
             </div>
           </div>
@@ -536,12 +491,12 @@ onMounted(async () => {
           <div class="metric-tile">
             <div class="mt-icon amber">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
               </svg>
             </div>
             <div class="mt-content">
-              <div class="mt-label">Слабых тем выявлено</div>
-              <div class="mt-value">{{ data.weak_topics.length }}</div>
+              <div class="mt-label">Среднее время сессии</div>
+              <div class="mt-value">{{ data.summary.avg_voice_session_ms != null ? fmtMs(data.summary.avg_voice_session_ms) : '—' }}</div>
             </div>
           </div>
         </div>
@@ -551,8 +506,8 @@ onMounted(async () => {
       <div v-if="!loading && data && activeTab === 'ai'" class="tab-content">
         <div class="chart-block full">
           <div class="chart-header">
-            <div class="chart-title">Время ответа LLM и RAG</div>
-            <div class="chart-desc">Среднее время генерации ответа и векторного поиска по дням (мс)</div>
+            <div class="chart-title">Время создания сессии и RAG</div>
+            <div class="chart-desc">Среднее время инициализации голосовой сессии и векторного RAG-поиска по дням (мс)</div>
           </div>
           <div class="chart-area h300">
             <canvas ref="perfChartRef"></canvas>
@@ -561,7 +516,7 @@ onMounted(async () => {
 
         <div class="info-cards">
           <div class="info-card" v-if="data.perf_by_day.some(x => x.llm_avg_ms != null)">
-            <div class="ic-title">LLM — генерация ответа</div>
+            <div class="ic-title">Голосовая сессия — инициализация</div>
             <div class="ic-stats">
               <div class="ic-stat">
                 <span class="ic-lbl">Минимум</span>
@@ -579,7 +534,7 @@ onMounted(async () => {
           </div>
           <div class="info-card empty-state" v-else>
             <div class="es-icon">📊</div>
-            <div>Нет данных о производительности LLM за выбранный период</div>
+            <div>Нет данных о производительности голосового ассистента за выбранный период</div>
           </div>
 
           <div class="info-card">
@@ -659,7 +614,7 @@ onMounted(async () => {
           <div class="chart-block flex-1" v-if="data.student_activity.length > 0">
             <div class="chart-header">
               <div class="chart-title">Топ-10 активных студентов</div>
-              <div class="chart-desc">Количество сообщений к ИИ-ассистенту за период</div>
+              <div class="chart-desc">Количество действий с голосовым ассистентом за период</div>
             </div>
             <div class="chart-area h280">
               <canvas ref="studentActivityChartRef"></canvas>
@@ -669,21 +624,6 @@ onMounted(async () => {
             <div class="es-icon">👥</div>
             <div class="es-title">Нет данных об активности</div>
             <div class="es-desc">Студенты ещё не делали запросов к ИИ за выбранный период</div>
-          </div>
-
-          <div class="chart-block flex-1" v-if="data.weak_topics.length > 0">
-            <div class="chart-header">
-              <div class="chart-title">Слабые темы</div>
-              <div class="chart-desc">Темы с наибольшим количеством ошибок по всем студентам</div>
-            </div>
-            <div class="chart-area" :style="{ height: Math.max(200, data.weak_topics.length * 38) + 'px' }">
-              <canvas ref="weakTopicsChartRef"></canvas>
-            </div>
-          </div>
-          <div class="empty-state-box" v-else>
-            <div class="es-icon">✅</div>
-            <div class="es-title">Слабых тем не обнаружено</div>
-            <div class="es-desc">Система не зафиксировала повторяющихся ошибок</div>
           </div>
         </div>
 
@@ -697,7 +637,7 @@ onMounted(async () => {
               <tr>
                 <th>#</th>
                 <th>Студент</th>
-                <th>Сообщений к ИИ</th>
+                <th>Действий с голосовым ИИ</th>
                 <th>Последняя активность</th>
               </tr>
             </thead>

@@ -3,8 +3,7 @@ import { ref, nextTick, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { UltravoxSession, AgentReaction } from 'ultravox-client'
 import { useAuth } from '../composables/useAuth'
-import { hwApi, chatApi, analyticsApi, notificationsApi, navigationApi } from '../api'
-import { prepareHighlightText, dispatchHighlight } from '../utils/highlightUtils.js'
+import { apiFetch, hwApi, chatApi, analyticsApi, notificationsApi, navigationApi } from '../api'
 import { useNotifications } from '../composables/useNotifications.js'
 
 const { addToast } = useNotifications()
@@ -216,6 +215,12 @@ async function refreshPageContextFromRoute() {
 
   if (path.startsWith('/courses/') && id) {
     currentPage.value = 'Курс'
+    const cachedCourse = allCourses.value.find(c => c.id === id)
+    if (cachedCourse) {
+      courseId.value = cachedCourse.id
+      courseName.value = cachedCourse.title
+      courseIcon.value = cachedCourse.icon || '📚'
+    }
     try {
       const token = localStorage.getItem('token')
       const headers = token ? { Authorization: `Bearer ${token}` } : {}
@@ -282,7 +287,9 @@ watch(
   async () => {
     lastVoiceNavPath = ''
     await refreshPageContextFromRoute()
-    await loadChatHistory()
+    if (!voiceMode.value) {
+      await loadChatHistory()
+    }
     if (voiceMode.value) {
       if (skipNextRouteContextPush) {
         skipNextRouteContextPush = false
@@ -310,16 +317,12 @@ const history   = ref([])
 const message   = ref('')
 
 async function loadChatHistory() {
-  const cid = courseId.value
-  if (!cid || cid === 'default') {
-    history.value = []
-    return
-  }
+  const cid = courseId.value || 'default'
   try {
     const u = user.value || (await fetchUser())
     if (!u) return
     const rows = await chatApi.getHistory(cid, 12)
-    if (courseId.value !== cid) return
+    if ((courseId.value || 'default') !== cid) return
     history.value = (rows || []).map((r) => ({ role: r.role, content: r.content, sources: [] }))
   } catch (_) {}
 }
@@ -345,10 +348,18 @@ const ttsEnabled = ref(true)
 const canSend = computed(() => message.value.trim().length > 0 && !isBusy.value)
 
 function togglePanel() {
-  if (voiceMode.value) { stopVoiceMode(); return }
+  if (voiceMode.value) {
+    stopVoiceMode()
+    isOpen.value = true
+    void loadChatHistory()
+    return
+  }
   const opening = !isOpen.value
   isOpen.value = opening
-  if (opening) void refreshPageContextFromRoute()
+  if (opening) {
+    void refreshPageContextFromRoute()
+    void loadChatHistory()
+  }
 }
 function closePanel() { isOpen.value = false }
 
@@ -389,6 +400,7 @@ let voiceIdleTimer = null
 let pendingNavPath = null
 let skipNextRouteContextPush = false
 let voiceNavHandledAt = 0
+const HIGHLIGHT_QUERY_KEY = 'aihl'
 
 function markVoiceNavHandled() {
   voiceNavHandledAt = Date.now()
@@ -397,6 +409,18 @@ function markVoiceNavHandled() {
 function navTargetKey(target) {
   if (!target) return ''
   return JSON.stringify({ path: target.path || '/', query: target.query || {} })
+}
+
+function withHighlightQuery(target, highlight) {
+  const text = String(highlight || '').trim()
+  if (!text || !target?.path?.startsWith('/courses/')) return target
+  return {
+    ...target,
+    query: {
+      ...(target.query || {}),
+      [HIGHLIGHT_QUERY_KEY]: text,
+    },
+  }
 }
 
 function isDuplicateVoiceNav(target) {
@@ -444,42 +468,6 @@ function lastVisibleUserTranscript(transcripts) {
   return ''
 }
 
-function effectiveCourseId() {
-  if (route.path.startsWith('/courses/') && route.params.id) return String(route.params.id)
-  const ctx = window.currentCourseLessonContext
-  if (ctx?.courseId) return String(ctx.courseId)
-  if (courseId.value && courseId.value !== 'default') return courseId.value
-  return 'default'
-}
-
-function setPendingHighlight(raw, options = {}) {
-  const validateOnPage = options === true || options.validateOnPage === true
-  const pageContent = validateOnPage ? getPageText() : ''
-  const prepared = prepareHighlightText(raw, pageContent, { validateOnPage })
-  if (!prepared.ok) {
-    if (prepared.reason === 'not_found' && prepared.text) {
-      // Навигация на другой урок — текст появится после загрузки страницы
-      window.pendingHighlightText = prepared.text
-      return true
-    }
-    if (prepared.reason === 'not_found') {
-      addToast('Фрагмент для подсветки не найден на странице', 'warning')
-    } else if (String(raw || '').trim()) {
-      addToast('Текст подсветки отклонён (слишком короткий)', 'warning')
-    }
-    return false
-  }
-  window.pendingHighlightText = prepared.text
-  return true
-}
-
-function tryHighlightOnCurrentPage(text) {
-  if (!text) return false
-  setPendingHighlight(text, { validateOnPage: false })
-  dispatchHighlight(window.pendingHighlightText, 400)
-  return true
-}
-
 function stripNavFromSpeech(text) {
   if (!text) return ''
   return String(text)
@@ -515,21 +503,11 @@ async function runVoiceNavigate(params) {
   }
   
   if (highlight) {
-    setPendingHighlight(highlight, { validateOnPage: false })
+    window.pendingHighlightText = highlight
   }
 
   if (!allCourses.value.length) await loadAllCourses()
   
-  fetch('/api/analytics/event', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ 
-      event_type: 'DEBUG_NAV_TOOL', 
-      user_id: 1, 
-      meta: params 
-    })
-  }).catch(() => {})
-
   const resolved = await resolveNavViaApi(raw)
   if (!resolved.ok) {
     return {
@@ -540,7 +518,7 @@ async function runVoiceNavigate(params) {
       agentReaction: AgentReaction.SPEAKS,
     }
   }
-  const ok = tryVoiceNavigate(resolved.path)
+  const ok = await tryVoiceNavigate(resolved.path, { highlight })
   if (ok) {
     return {
       result:
@@ -819,16 +797,31 @@ async function runOpenLesson(params) {
     }
   }
 
-  if (highlight) {
-    setPendingHighlight(highlight, { validateOnPage: false })
+  const target = {
+    path: `/courses/${cid}`,
+    query: { lesson_idx: idx, ...(highlight ? { aihl: highlight } : {}) }
   }
 
-  const target = { path: `/courses/${cid}`, query: { lesson_idx: idx } }
   try {
-    router.push(target).catch(e => alert('Router error: ' + e.message))
+    await router.push(target).catch(e => console.warn('Router error: ' + e.message))
   } catch(e) {
-    alert('Nav error: ' + e.message)
+    console.warn('Nav error: ' + e.message)
   }
+
+  await refreshPageContextFromRoute()
+  await syncVoicePageContext()
+
+  if (voiceMode.value && uvSession) {
+    const key = voiceContextKey()
+    lastPushedVoiceContextKey = key
+    try {
+      await uvSession.sendText(buildVoiceContextMessage(), true)
+    } catch (e) {
+      console.warn('[voice context] sendText failed', e)
+    }
+  }
+
+  scheduleVoicePageContextPush(1000, true)
   
   return {
     result: `Переход на урок ${idx} выполнен. Урок уже открыт на экране. Не комментируй смену экрана и ничего не говори об этом.`,
@@ -897,7 +890,7 @@ async function runOpenAdjacentLesson(params) {
       courses: coursesNavPayload(),
     })
     if (res.status === 'ok' && res.path) {
-      tryVoiceNavigate(res.path)
+      await tryVoiceNavigate(res.path)
       return {
         result: res.message || 'Переход выполнен.',
         responseType: 'tool-response',
@@ -918,7 +911,7 @@ async function runOpenAdjacentLesson(params) {
   }
 }
 
-function tryVoiceNavigate(rawPath) {
+async function tryVoiceNavigate(rawPath, { highlight } = {}) {
   const target = parseNavTarget(rawPath)
   if (!target) {
     console.warn('[nav] неизвестный путь:', rawPath)
@@ -928,6 +921,11 @@ function tryVoiceNavigate(rawPath) {
   }
 
   const targetPath = (target.path || '/').replace(/\/+$/, '') || '/'
+
+  // Текст подсветки передаётся через query-параметр aihl — без таймеров и глобального state
+  if (highlight) {
+    target.query = { ...(target.query || {}), aihl: highlight }
+  }
 
   if (isDuplicateVoiceNav(target)) {
     return true
@@ -940,18 +938,26 @@ function tryVoiceNavigate(rawPath) {
   recordNavMetric(true, targetPath)
 
   try {
-    router.push(target).catch(() => {})
+    await router.push(target).catch(() => {})
   } catch(e) {
     console.warn('[nav] err', e)
   }
 
-  scheduleVoicePageContextPush(900, true)
-  const pendingHL = window.pendingHighlightText || ''
-  if (pendingHL) {
-    setTimeout(() => {
-      window.dispatchEvent(new CustomEvent('eduai-highlight-text', { detail: { text: pendingHL } }))
-    }, 1200)
+  // Сразу обновляем контекст страницы, не дожидаясь таймеров
+  await refreshPageContextFromRoute()
+  await syncVoicePageContext()
+
+  if (voiceMode.value && uvSession) {
+    const key = voiceContextKey()
+    lastPushedVoiceContextKey = key
+    try {
+      await uvSession.sendText(buildVoiceContextMessage(), true)
+    } catch (e) {
+      console.warn('[voice context] sendText failed', e)
+    }
   }
+
+  scheduleVoicePageContextPush(1000, true)
   return true
 }
 
@@ -963,7 +969,7 @@ function voiceContextKey() {
 
 function buildVoiceContextMessage() {
   const pageText = getPageText()
-  const cid = effectiveCourseId()
+  const cid = courseId.value || 'default'
   const cname = courseName.value || 'EduAI'
   const lesson = getActiveLessonContext()
   const lessonBlock = lesson
@@ -1039,10 +1045,6 @@ async function runVoiceRagQuery(params) {
   }
 
   if (!query?.trim()) return 'Нужен поисковый запрос по материалам курса.'
-  const cid = effectiveCourseId()
-  if (!cid || cid === 'default') {
-    return 'Откройте страницу курса, чтобы искать в его материалах.'
-  }
   try {
     const token = localStorage.getItem('token')
     const headers = { 'Content-Type': 'application/json' }
@@ -1052,37 +1054,19 @@ async function runVoiceRagQuery(params) {
       headers,
       body: JSON.stringify({
         query: query.trim(),
-        course_id: cid,
+        course_id: courseId.value,
         session_id: voiceSessionId,
       }),
     })
     if (!res.ok) throw new Error(await res.text())
     const data = await res.json()
-    const hl = data.highlight_text || data.highlightText
-    if (hl) {
-      const targetPath = data.vpath || ''
-      const onSameLesson =
-        !targetPath ||
-        route.fullPath === targetPath ||
-        (targetPath.includes('lesson=') &&
-          route.query.lesson &&
-          targetPath.includes(`lesson=${route.query.lesson}`))
-      if (onSameLesson) {
-        tryHighlightOnCurrentPage(hl)
-      } else {
-        setPendingHighlight(hl, { validateOnPage: false })
-      }
-    }
-    if (data.indexed_chunks === 0) {
-      addToast('Материалы курса не проиндексированы — запустите sync_all_to_ai.py', 'warning')
-    }
     return data.results || 'Информация по запросу не найдена в материалах курса.'
   } catch (e) {
     return `Ошибка поиска в материалах: ${e.message || e}.`
   }
 }
 
-async function runVoiceHomeworkReview(params = {}) {
+async function runVoiceHomeworkReview() {
   const u = user.value || (await fetchUser())
   if (u?.role !== 'teacher') {
     return 'Проверка домашних заданий доступна только преподавателю.'
@@ -1091,15 +1075,6 @@ async function runVoiceHomeworkReview(params = {}) {
   const assignmentId = hw?.assignment?.id
   if (!assignmentId || !route.path.startsWith('/homeworks/')) {
     return 'Откройте страницу домашнего задания и выберите ученика в списке слева, затем попросите проверить снова.'
-  }
-  const studentName = hw.assignment.student
-  const confirmed = params?.confirm === true || params?.confirmed === true
-  if (!confirmed) {
-    return (
-      `Спроси преподавателя: «Проверить работу ${studentName} с помощью ИИ?» ` +
-      `Если ответ «да», «давай», «проверяй» — вызови reviewHomework с confirm=true. ` +
-      `Без явного подтверждения проверку не запускай.`
-    )
   }
   const status = hw.assignment.status
   if (status === 'graded') {
@@ -1114,6 +1089,7 @@ async function runVoiceHomeworkReview(params = {}) {
     return `У ученика ${hw.assignment.student} ещё нет сданной работы для проверки.`
   }
 
+  const studentName = hw.assignment.student
   voiceState.value = 'THINKING'
 
   void (async () => {
@@ -1187,6 +1163,16 @@ async function runVoiceMassHomeworkReview() {
   } catch (e) {
     const msg = e?.message || String(e)
     return `Сбой при массовой проверке. Скажи пользователю коротко: произошла ошибка при запуске массовой проверки (${msg}).`
+  }
+}
+async function runAdminReport(params) {
+  try {
+    const reportType = params.report_type || 'summary'
+    const res = await apiFetch(`/analytics/${reportType}`)
+    return JSON.stringify(res, null, 2)
+  } catch (e) {
+    const msg = e?.message || String(e)
+    return `Не удалось получить отчет (${msg}). Скажи администратору, что возникла ошибка при запросе отчета.`
   }
 }
 
@@ -1351,19 +1337,57 @@ function syncVoiceTranscriptsToHistory() {
   for (const t of transcripts) {
     if (t.ordinal == null || voiceHistorySyncedOrdinals.has(t.ordinal)) continue
     if (!t.isFinal) continue
-    if (t.speaker === 'user' && isAutoContextTranscript(t)) continue
+    
     const raw = t.text || ''
-    if (t.speaker === 'agent' && isHiddenVoiceContextMessage(raw)) continue
+    
+    if (t.speaker === 'user' && isAutoContextTranscript(t)) {
+      voiceHistorySyncedOrdinals.add(t.ordinal)
+      continue
+    }
+    if (t.speaker === 'agent' && isHiddenVoiceContextMessage(raw)) {
+      voiceHistorySyncedOrdinals.add(t.ordinal)
+      continue
+    }
 
     const role = t.speaker === 'user' ? 'user' : 'assistant'
-    const content = role === 'assistant' ? stripNavFromSpeech(raw).trim() : raw.trim()
+    const content = raw.trim()
+    
     if (!content) continue
 
     voiceHistorySyncedOrdinals.add(t.ordinal)
     history.value.push({ role, content, sources: [] })
     added = true
+    
+    const activeCid = courseId.value || 'default'
+    // Сохраняем в базу данных под текущим курсом
+    chatApi.saveMessage({
+      course_id: activeCid,
+      role,
+      content
+    }).catch((err) => {
+      console.error('[saveMessage] failed for course_id ' + activeCid, err)
+    })
+
+    // Если мы на странице курса, также копируем на главную ('default'),
+    // чтобы история диалога сохранялась на главной странице при переходе туда и обратно
+    if (activeCid !== 'default') {
+      chatApi.saveMessage({
+        course_id: 'default',
+        role,
+        content
+      }).catch((err) => {
+        console.error('[saveMessage] failed for default course', err)
+      })
+    }
   }
   if (added && isOpen.value) scrollBottom()
+}
+
+function debugDumpTranscripts() {
+  if (!uvSession) return
+  const all = (uvSession.transcripts || []).map(t => `[${t.speaker.toUpperCase()}] ${t.isFinal ? '(Final)' : '(Draft)'}: ${t.text}`).join('\n')
+  history.value.push({ role: 'assistant', content: `**DEBUG ДАМП СЕССИИ:**\n\n${all}`, sources: [] })
+  setTimeout(scrollBottom, 100)
 }
 
 function clearVoiceIdleTimer() {
@@ -1463,9 +1487,10 @@ async function startUltravoxSession() {
     uvSession.registerToolImplementation('openLesson', (params) => runOpenLesson(params))
     uvSession.registerToolImplementation('openAdjacentLesson', (params) => runOpenAdjacentLesson(params))
     uvSession.registerToolImplementation('queryKnowledgeBase', (params) => runVoiceRagQuery(params))
-    uvSession.registerToolImplementation('reviewHomework', (params) => runVoiceHomeworkReview(params))
+    uvSession.registerToolImplementation('reviewHomework', () => runVoiceHomeworkReview())
     uvSession.registerToolImplementation('reviewAllHomeworks', () => runVoiceMassHomeworkReview())
     uvSession.registerToolImplementation('getTeacherSummary', () => runTeacherSummary())
+    uvSession.registerToolImplementation('adminGetReport', (params) => runAdminReport(params))
     uvSession.registerToolImplementation('getHomeworkReminders', () => runVoiceReminders())
     uvSession.registerToolImplementation('getHomeworkHint', () => runVoiceHomeworkHint())
     uvSession.registerToolImplementation('showCourseSelection', (params) => runShowCourseSelection(params))
@@ -1570,14 +1595,13 @@ async function startUltravoxSession() {
         voiceAssistantText.value = display
         lastAssistantText.value = display
 
-        let navPath = extractNavPathFromText(raw)
-        if (!navPath) navPath = detectLessonPathInText(display) || detectLessonPathInText(raw)
-        if (!navPath) navPath = detectCoursePathInText(display) || detectCoursePathInText(raw)
-        if (!navPath) navPath = detectStaticNavInText(display)
+        // Для агента автоматический переход совершается ТОЛЬКО при наличии явной команды навигации [NAVIGATE:...] или NAVIGATE ...
+        const navPath = extractNavPathFromText(raw)
         if (navPath) {
           void resolveNavViaApi(navPath).then(r => { if (r.ok) tryVoiceNavigate(r.path) })
-        } else if (!navPath) {
-          const offer = detectCourseOfferInText(display) || detectCoursePathInText(display)
+        } else {
+          // Если явного перехода нет, проверяем, предлагает ли агент перейти (наличие триггерных слов вроде "хотите перейти")
+          const offer = detectCourseOfferInText(display)
           if (offer) pendingNavPath = offer
         }
       }
@@ -2674,7 +2698,10 @@ function onOrbPointerUp(e) {
                 <div class="wp-status">Online</div>
               </div>
             </div>
-            <button class="icon-btn" @click="togglePanel">✕</button>
+            <div style="display:flex; gap: 8px;">
+              <button class="icon-btn" @click="debugDumpTranscripts" title="Дамп сессии">🐛</button>
+              <button class="icon-btn" @click="togglePanel">✕</button>
+            </div>
           </div>
           <div v-if="homeworkReminder && !history.length" class="wp-reminder">
             <span>📋 {{ homeworkReminder }}</span>
@@ -2760,7 +2787,7 @@ function onOrbPointerUp(e) {
         @change="applyVoiceVolume"
         title="Громкость ИИ Ассистента"
       />
-      <button type="button" class="voice-dock-btn" @click="isOpen = true" title="Открыть чат">💬</button>
+      <button type="button" class="voice-dock-btn" @click="stopVoiceMode(); isOpen = true; loadChatHistory()" title="Открыть чат">💬</button>
       <button type="button" class="voice-dock-btn voice-dock-end" @click="stopVoiceMode" title="Завершить">✕</button>
     </div>
 

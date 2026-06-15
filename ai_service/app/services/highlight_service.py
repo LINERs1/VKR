@@ -8,8 +8,8 @@ _HTML_RE = re.compile(r"<[^>]+>")
 _URL_RE = re.compile(r"https?://\S+|www\.\S+", re.I)
 _CODE_FENCE_RE = re.compile(r"```[\s\S]*?```")
 
-HIGHLIGHT_MIN_WORDS = 3
-HIGHLIGHT_MIN_WORDS_CODE = 2
+HIGHLIGHT_MIN_WORDS = 1
+HIGHLIGHT_MIN_WORDS_CODE = 1
 HIGHLIGHT_MAX_WORDS = 8
 
 _CODE_HINTS = frozenset({"for", "in", "while", "def", "class", "import", "return", "if", "else"})
@@ -37,11 +37,12 @@ def sanitize_highlight_text(text: str | None) -> str:
 
 
 def normalize_for_match(text: str) -> str:
-    return re.sub(
+    clean = re.sub(
         r"[.,/#!$%^&*;:{}=\-_`~()«»\"'\n\r\t]",
         " ",
         (text or "").lower(),
-    ).replace("  ", " ").strip()
+    )
+    return re.sub(r"\s+", " ", clean).strip()
 
 
 def highlight_search_key(text: str, word_limit: int = 5) -> str:

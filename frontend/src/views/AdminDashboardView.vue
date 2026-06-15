@@ -1,10 +1,112 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, watch, computed } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { apiFetch } from '../api'
+import { useAuth } from '../composables/useAuth'
 
-const activeTab = ref('courses') // 'courses' or 'materials'
+const route = useRoute()
+const router = useRouter()
+const { fetchUser } = useAuth()
 
-// --- Courses State ---
+const activeTab = ref(route.query.tab || 'courses') // 'courses' or 'materials' or 'ai_routes'
+
+watch(() => route.query.tab, (newTab) => {
+  if (newTab) {
+    activeTab.value = newTab
+  }
+})
+
+const changeTab = (tab) => {
+  activeTab.value = tab
+  router.push({ query: { ...route.query, tab } })
+}
+
+// --- AI Routes State ---
+const activeRouteTab = ref('static')
+const aiRoutes = ref([])
+const dynamicRoutes = ref([])
+
+// --- Pagination & Filters for Dynamic Routes ---
+const dynamicSearch = ref('')
+const dynamicTypeFilter = ref('all')
+const dynamicCurrentPage = ref(1)
+const dynamicItemsPerPage = ref(10)
+
+const filteredDynamicRoutes = computed(() => {
+  let result = dynamicRoutes.value
+  
+  if (dynamicTypeFilter.value !== 'all') {
+    result = result.filter(r => r.type === dynamicTypeFilter.value)
+  }
+  
+  if (dynamicSearch.value.trim()) {
+    const q = dynamicSearch.value.toLowerCase()
+    result = result.filter(r => 
+      (r.identifier && r.identifier.toLowerCase().includes(q)) || 
+      (r.title && r.title.toLowerCase().includes(q))
+    )
+  }
+  
+  return result
+})
+
+const dynamicTotalPages = computed(() => {
+  return Math.ceil(filteredDynamicRoutes.value.length / dynamicItemsPerPage.value) || 1
+})
+
+const paginatedDynamicRoutes = computed(() => {
+  const start = (dynamicCurrentPage.value - 1) * dynamicItemsPerPage.value
+  const end = start + dynamicItemsPerPage.value
+  return filteredDynamicRoutes.value.slice(start, end)
+})
+
+watch([dynamicSearch, dynamicTypeFilter], () => {
+  dynamicCurrentPage.value = 1
+})
+
+const dynamicPageInput = ref(dynamicCurrentPage.value)
+
+watch(dynamicCurrentPage, (newVal) => {
+  dynamicPageInput.value = newVal
+})
+
+const leftPages = computed(() => {
+  const pages = []
+  const start = Math.max(1, dynamicCurrentPage.value - 3)
+  for (let i = start; i < dynamicCurrentPage.value; i++) {
+    pages.push(i)
+  }
+  return pages
+})
+
+const rightPages = computed(() => {
+  const pages = []
+  const end = Math.min(dynamicTotalPages.value, dynamicCurrentPage.value + 3)
+  for (let i = dynamicCurrentPage.value + 1; i <= end; i++) {
+    pages.push(i)
+  }
+  return pages
+})
+
+const goToPage = () => {
+  let p = parseInt(dynamicPageInput.value)
+  if (isNaN(p)) {
+    dynamicPageInput.value = dynamicCurrentPage.value
+    return
+  }
+  if (p < 1) p = 1
+  if (p > dynamicTotalPages.value) p = dynamicTotalPages.value
+  
+  dynamicCurrentPage.value = p
+  dynamicPageInput.value = p
+}
+
+const showCreateRouteModal = ref(false)
+const newRoute = ref({
+  identifier: '',
+  title: '',
+  description: ''
+})// --- Courses State ---
 const courses = ref([])
 const showCreateModal = ref(false)
 const newCourse = ref({
@@ -27,6 +129,8 @@ const uploadMessage = ref('')
 
 onMounted(async () => {
   await fetchCourses()
+  await fetchAiRoutes()
+  await fetchDynamicRoutes()
 })
 
 const fetchCourses = async () => {
@@ -132,6 +236,112 @@ const formatDate = (ds) => {
   if (!ds) return ''
   return new Date(ds).toLocaleString('ru-RU')
 }
+
+// --- AI Routes Logic ---
+const isEditingRoute = ref(false)
+
+const formatAccessRoles = (roles) => {
+  if (!roles || roles.length === 0) return 'Никто'
+  if (roles.includes('all')) return 'Все'
+  if (roles.includes('student') && roles.includes('teacher') && roles.includes('admin')) return 'Все'
+  
+  const map = {
+    'student': 'Студенты',
+    'teacher': 'Учителя',
+    'admin': 'Админы'
+  }
+  return roles.map(r => map[r] || r).join(', ')
+}
+
+const fetchAiRoutes = async () => {
+  try {
+    aiRoutes.value = await apiFetch(`/navigation/custom-nodes?t=${Date.now()}`)
+  } catch (err) {
+    console.error('Ошибка загрузки ИИ маршрутов:', err)
+  }
+}
+
+const fetchDynamicRoutes = async () => {
+  try {
+    dynamicRoutes.value = await apiFetch(`/navigation/dynamic-nodes?t=${Date.now()}`)
+  } catch (err) {
+    console.error('Ошибка загрузки динамических маршрутов:', err)
+  }
+}
+
+const openCreateRouteModal = () => {
+  isEditingRoute.value = false
+  newRoute.value = { id: null, identifier: '/', title: '', description: '', allowed_roles: ['student', 'teacher', 'admin'] }
+  showCreateRouteModal.value = true
+}
+
+const openEditRouteModal = (route) => {
+  isEditingRoute.value = true
+  let roles = route.allowed_roles ? [...route.allowed_roles] : ['student', 'teacher', 'admin']
+  if (roles.includes('all') || roles.length === 0) {
+    roles = ['student', 'teacher', 'admin']
+  }
+  newRoute.value = {
+    id: route.id,
+    identifier: route.identifier,
+    title: route.title,
+    description: route.description || '',
+    allowed_roles: roles
+  }
+  showCreateRouteModal.value = true
+}
+
+const filterRoutePath = () => {
+  if (!newRoute.value.identifier) return
+  let val = newRoute.value.identifier.toLowerCase()
+  val = val.replace(/[^a-z0-9\-_/]/g, '')
+  if (!val.startsWith('/')) {
+    val = '/' + val
+  }
+  newRoute.value.identifier = val
+}
+
+const saveAiRoute = async () => {
+  if (!newRoute.value.allowed_roles || newRoute.value.allowed_roles.length === 0) {
+    alert('Необходимо выбрать хотя бы одну роль для доступа к маршруту')
+    return
+  }
+  try {
+    const payload = {
+      identifier: newRoute.value.identifier,
+      title: newRoute.value.title,
+      description: newRoute.value.description || '',
+      allowed_roles: newRoute.value.allowed_roles
+    }
+    if (isEditingRoute.value) {
+      await apiFetch(`/navigation/custom-nodes/${newRoute.value.id}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload)
+      })
+    } else {
+      await apiFetch('/navigation/custom-nodes', {
+        method: 'POST',
+        body: JSON.stringify(payload)
+      })
+    }
+    showCreateRouteModal.value = false
+    await fetchUser(true)
+    await fetchAiRoutes()
+  } catch (err) {
+    alert(err.message || 'Ошибка сохранения маршрута')
+  }
+}
+
+const deleteAiRoute = async (id) => {
+  if (!confirm('Удалить этот маршрут из ИИ?')) return
+  try {
+    await apiFetch(`/navigation/custom-nodes/${id}`, { method: 'DELETE' })
+    await fetchUser(true)
+    await fetchAiRoutes()
+  } catch (err) {
+    alert(err.message || 'Ошибка удаления')
+  }
+}
 </script>
 
 <template>
@@ -146,11 +356,14 @@ const formatDate = (ds) => {
         <span>EduAI Admin</span>
       </div>
       <nav class="sidebar-nav">
-        <button :class="['nav-btn', { active: activeTab === 'courses' }]" @click="activeTab = 'courses'">
+        <button :class="['nav-btn', { active: activeTab === 'courses' }]" @click="changeTab('courses')">
           📚 Курсы
         </button>
-        <button :class="['nav-btn', { active: activeTab === 'materials' }]" @click="activeTab = 'materials'">
+        <button :class="['nav-btn', { active: activeTab === 'materials' }]" @click="changeTab('materials')">
           📄 Методички
+        </button>
+        <button :class="['nav-btn', { active: activeTab === 'ai_routes' }]" @click="changeTab('ai_routes')">
+          🤖 ИИ Маршруты
         </button>
         <div class="nav-divider"></div>
         <router-link to="/" class="nav-btn back-btn">← На главную</router-link>
@@ -186,7 +399,7 @@ const formatDate = (ds) => {
                 <td>{{ c.lessons_count }}</td>
                 <td>{{ c.students }}</td>
                 <td>
-                  <button class="btn-ghost-sm" @click="selectedCourse = c.id; activeTab = 'materials'; fetchMaterials()">Материалы</button>
+                  <button class="btn-ghost-sm" @click="selectedCourse = c.id; changeTab('materials'); fetchMaterials()">Материалы</button>
                 </td>
               </tr>
               <tr v-if="courses.length === 0">
@@ -247,7 +460,147 @@ const formatDate = (ds) => {
           </div>
         </div>
       </div>
+
+    <!-- ТАБ: ИИ МАРШРУТЫ -->
+    <div v-if="activeTab === 'ai_routes'" class="tab-pane">
+      <div class="page-header">
+        <div>
+          <h1>ИИ Маршруты</h1>
+          <p class="subtitle">Управление системными страницами для графа навигации ИИ (матрица инцидентности)</p>
+        </div>
+        <button v-if="activeRouteTab === 'static'" class="btn-primary" @click="openCreateRouteModal">+ Добавить маршрут</button>
+      </div>
+
+      <div class="route-tabs">
+        <button :class="['route-tab', { active: activeRouteTab === 'static' }]" @click="activeRouteTab = 'static'">Статические (Редактируемые)</button>
+        <button :class="['route-tab', { active: activeRouteTab === 'dynamic' }]" @click="activeRouteTab = 'dynamic'">Динамические (Синхронизированные)</button>
+      </div>
+
+      <div class="card" v-if="activeRouteTab === 'static'">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>URL (Identifier)</th>
+              <th>Название</th>
+              <th>Описание (для ИИ)</th>
+              <th width="100">Доступ</th>
+              <th width="100">Действия</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="r in aiRoutes" :key="r.id">
+              <td class="text-muted">{{ r.id }}</td>
+              <td class="font-medium">{{ r.identifier }}</td>
+              <td>{{ r.title }}</td>
+              <td class="text-muted">{{ r.description || '-' }}</td>
+              <td><span class="badge">{{ formatAccessRoles(r.allowed_roles) }}</span></td>
+              <td style="display: flex; gap: 8px;">
+                <button @click="openEditRouteModal(r)" class="btn-ghost-sm">Изменить</button>
+                <button @click="deleteAiRoute(r.id)" class="btn-danger-sm" :disabled="r.identifier === '/'">Удалить</button>
+              </td>
+            </tr>
+            <tr v-if="aiRoutes.length === 0">
+              <td colspan="5" class="empty-state">Нет кастомных маршрутов</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="card" v-if="activeRouteTab === 'dynamic'">
+        <div class="filters-bar" style="display: flex; gap: 16px; margin-bottom: 16px;">
+          <input type="text" v-model="dynamicSearch" placeholder="Поиск по URL или названию..." class="input-field" style="flex: 1;" />
+          <select v-model="dynamicTypeFilter" class="input-field" style="width: 200px;">
+            <option value="all">Все типы</option>
+            <option value="course">Курс</option>
+            <option value="lesson">Урок</option>
+            <option value="action">Действие</option>
+          </select>
+        </div>
+
+        <table class="table">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Тип</th>
+              <th>URL (Identifier)</th>
+              <th>Название</th>
+              <th>Описание (для ИИ)</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="r in paginatedDynamicRoutes" :key="r.id">
+              <td class="text-muted">{{ r.id }}</td>
+              <td><span class="badge">{{ r.type }}</span></td>
+              <td class="font-medium">{{ r.identifier }}</td>
+              <td>{{ r.title }}</td>
+              <td class="text-muted">{{ r.description || '-' }}</td>
+            </tr>
+            <tr v-if="paginatedDynamicRoutes.length === 0">
+              <td colspan="5" class="empty-state">Маршруты не найдены</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="pagination-advanced" style="display: flex; justify-content: center; align-items: center; gap: 8px; margin-top: 24px;" v-if="dynamicTotalPages > 1">
+          <button class="page-square" :disabled="dynamicCurrentPage === 1" @click="dynamicCurrentPage--">‹</button>
+          
+          <button class="page-square" v-for="p in leftPages" :key="p" @click="dynamicCurrentPage = p">{{ p }}</button>
+          
+          <input type="text" class="page-square active-page-input" v-model="dynamicPageInput" @blur="goToPage" @keydown.enter="goToPage" />
+          
+          <button class="page-square" v-for="p in rightPages" :key="p" @click="dynamicCurrentPage = p">{{ p }}</button>
+          
+          <button class="page-square" :disabled="dynamicCurrentPage === dynamicTotalPages" @click="dynamicCurrentPage++">›</button>
+        </div>
+      </div>
     </div>
+  </div> <!-- Closes admin-content -->
+
+  <!-- Модалка: Создание/Редактирование ИИ Маршрута -->
+  <div v-if="showCreateRouteModal" class="modal-overlay" @click.self="showCreateRouteModal = false">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>{{ isEditingRoute ? 'Редактировать маршрут' : 'Добавить ИИ Маршрут' }}</h2>
+        <button class="close-btn" @click="showCreateRouteModal = false">×</button>
+      </div>
+      <form @submit.prevent="saveAiRoute" class="modal-body form-stack">
+        <div class="form-group">
+          <label>URL путь (например: /achievements)</label>
+          <input type="text" v-model="newRoute.identifier" @input="filterRoutePath" required placeholder="/path" class="input-field" />
+        </div>
+        <div class="form-group">
+          <label>Название (для пользователя)</label>
+          <input type="text" v-model="newRoute.title" required placeholder="Достижения" class="input-field" />
+        </div>
+        <div class="form-group">
+          <label>Описание (смысл страницы для ИИ)</label>
+          <textarea v-model="newRoute.description" placeholder="Здесь студент может посмотреть свои кубки и рейтинг..." class="input-field"></textarea>
+        </div>
+        <div class="form-group">
+          <label>Доступ к маршруту</label>
+          <div class="checkbox-group">
+            <label class="checkbox-label">
+              <input type="checkbox" v-model="newRoute.allowed_roles" value="student" class="checkbox-input">
+              Студенты
+            </label>
+            <label class="checkbox-label">
+              <input type="checkbox" v-model="newRoute.allowed_roles" value="teacher" class="checkbox-input">
+              Преподаватели
+            </label>
+            <label class="checkbox-label">
+              <input type="checkbox" v-model="newRoute.allowed_roles" value="admin" class="checkbox-input">
+              Администраторы
+            </label>
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn-ghost" @click="showCreateRouteModal = false">Отмена</button>
+          <button type="submit" class="btn-primary">{{ isEditingRoute ? 'Сохранить изменения' : 'Сохранить в граф' }}</button>
+        </div>
+      </form>
+    </div>
+  </div>
 
     <!-- МОДАЛКА: СОЗДАНИЕ КУРСА -->
     <div v-if="showCreateModal" class="modal-overlay" @click.self="showCreateModal = false">
@@ -488,7 +841,106 @@ const formatDate = (ds) => {
   border: 1px solid var(--border);
   box-shadow: 0 20px 40px rgba(0,0,0,0.4);
 }
-.modal-content h2 { margin: 0 0 24px 0; }
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+}
+.modal-header h2 { margin: 0; }
+.close-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 24px;
+  cursor: pointer;
+  line-height: 1;
+  padding: 4px;
+  border-radius: 4px;
+}
+.close-btn:hover {
+  color: var(--text);
+  background: var(--bg-elevated);
+}
+
+/* Route Tabs */
+.route-tabs {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 24px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 8px;
+}
+.route-tab {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 15px;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 8px 16px;
+  border-radius: 8px;
+  transition: all 0.2s;
+}
+.route-tab:hover {
+  color: var(--text);
+  background: var(--bg-elevated);
+}
+.route-tab.active {
+  color: var(--text);
+  background: var(--bg-elevated);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+.badge {
+  background: var(--bg-elevated);
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  text-transform: uppercase;
+  border: 1px solid var(--border);
+}
+
+/* Pagination Advanced */
+.page-square {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  padding: 0;
+}
+.page-square:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.page-square:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.active-page-input {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+  text-align: center;
+  font-weight: bold;
+}
+.active-page-input:hover {
+  background: var(--accent);
+  color: white;
+}
+.active-page-input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 
 .form-group {
   margin-bottom: 20px;
@@ -554,5 +1006,62 @@ const formatDate = (ds) => {
   color: var(--text-muted);
   background: var(--bg-raised);
   border-radius: 8px;
+}
+
+/* Custom Styled Checkboxes */
+.checkbox-group {
+  display: flex;
+  gap: 20px;
+  margin-top: 8px;
+}
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  color: var(--text);
+  font-size: 14px;
+  user-select: none;
+  font-weight: 500;
+}
+.checkbox-input {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-elevated);
+  cursor: pointer;
+  display: inline-grid;
+  place-content: center;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+  margin: 0;
+}
+.checkbox-input:hover {
+  border-color: var(--accent);
+  box-shadow: 0 0 8px rgba(99, 102, 241, 0.2);
+}
+.checkbox-input::before {
+  content: "";
+  width: 10px;
+  height: 10px;
+  transform: scale(0);
+  transition: 120ms transform ease-in-out;
+  background-color: currentColor;
+  clip-path: polygon(14% 44%, 0 65%, 50% 100%, 100% 16%, 80% 0%, 43% 62%);
+}
+.checkbox-input:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.checkbox-input:checked::before {
+  transform: scale(1);
+}
+.checkbox-input:focus {
+  outline: 2px solid var(--accent-subtle);
+  outline-offset: 2px;
 }
 </style>

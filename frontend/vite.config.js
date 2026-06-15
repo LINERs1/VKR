@@ -13,6 +13,7 @@ export default defineConfig({
       '/api/stt': { target: 'http://localhost:8000', changeOrigin: true },
       '/api/ingest': { target: 'http://localhost:8000', changeOrigin: true },
       '/api/widget': { target: 'http://localhost:8000', changeOrigin: true },
+      '/api/navigation': { target: 'http://localhost:8000', changeOrigin: true },
       '/api': { target: 'http://localhost:8001', changeOrigin: true },
     },
   },

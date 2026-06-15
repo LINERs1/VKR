@@ -27,7 +27,6 @@ from app.services.homework_hint_service import generate_homework_hint
 from app.services.homework_journal_service import build_journal_summary, build_reminders
 from app.services.homework_review_service import review_assignment
 from app.services.homework_template_service import parse_content
-from app.services.weak_topics_service import record_quiz_weak_topics
 from app.services.metrics_service import record_metric
 
 router = APIRouter()
@@ -85,6 +84,7 @@ def create_homework(
         teacher_id=current_user.id,
         title=hw_in.title,
         description=hw_in.description,
+        ai_criteria=hw_in.ai_criteria,
     )
     db.add(homework)
     db.flush()
@@ -215,14 +215,6 @@ def submit_homework(
     assignment.student_text = submission.student_text
     assignment.student_quiz_json = _validate_and_dump_quiz(assignment.homework, submission)
     assignment.status = HomeworkStatus.submitted.value
-
-    record_quiz_weak_topics(
-        db,
-        student_id=current_user.id,
-        course_id=assignment.homework.course_id,
-        content_json=assignment.homework.content_json,
-        student_quiz_json=assignment.student_quiz_json,
-    )
 
     db.add(Notification(
         user_id=assignment.homework.teacher_id,

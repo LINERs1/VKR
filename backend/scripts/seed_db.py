@@ -125,7 +125,7 @@ def seed_data():
         # Удаляем старые метрики для чистоты (опционально)
         # db.query(AssistantMetric).delete()
         
-        event_types = ["chat_rag", "chat_llm", "voice_navigation"]
+        event_types = ["voice_rag", "voice_session", "voice_navigation"]
         now = datetime.utcnow()
         
         for _ in range(300):  # 300 случайных событий

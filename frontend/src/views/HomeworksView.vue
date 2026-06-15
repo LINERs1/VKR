@@ -78,6 +78,10 @@
             <textarea v-model="newHw.description" required rows="4" placeholder="Что нужно сделать..."></textarea>
           </div>
           <div class="form-group">
+            <label>Скрытые критерии проверки для ИИ (опционально)</label>
+            <textarea v-model="newHw.ai_criteria" rows="2" placeholder="Например: Снимай 2 балла за отсутствие комментариев..."></textarea>
+          </div>
+          <div class="form-group">
             <label>Выберите учеников:</label>
             <div class="students-list">
               <label v-for="st in availableStudents" :key="st.id" class="student-checkbox">
@@ -123,6 +127,7 @@ const newHw = ref({
   course_id: '',
   title: '',
   description: '',
+  ai_criteria: '',
   student_ids: []
 })
 
@@ -176,7 +181,7 @@ async function handleCreate() {
   try {
     await hwApi.createHomework(newHw.value)
     showModal.value = false
-    newHw.value = { course_id: '', title: '', description: '', student_ids: [] }
+    newHw.value = { course_id: '', title: '', description: '', ai_criteria: '', student_ids: [] }
     await loadHomeworks()
   } catch(e) {
     alert(e.message)

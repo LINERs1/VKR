@@ -1,0 +1,103 @@
+<mxfile host="app.diagrams.net" agent="Mozilla/5.0">
+  <diagram id="diagram-platform" name="PlatformRelations">
+    <mxGraphModel dx="3014" dy="760" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1600" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="2" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fontSize=14;fontStyle=1" value="Курс" vertex="1">
+          <mxGeometry height="60" width="180" x="410" y="70" as="geometry" />
+        </mxCell>
+        <mxCell id="3" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fontSize=14;fontStyle=1" value="Урок" vertex="1">
+          <mxGeometry height="60" width="180" x="1000" y="70" as="geometry" />
+        </mxCell>
+        <mxCell id="4" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fontSize=14;fontStyle=1" value="Шаблон ДЗ" vertex="1">
+          <mxGeometry height="60" width="180" x="10" y="370" as="geometry" />
+        </mxCell>
+        <mxCell id="5" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fontSize=14;fontStyle=1" value="Домашнее задание" vertex="1">
+          <mxGeometry height="60" width="180" x="410" y="370" as="geometry" />
+        </mxCell>
+        <mxCell id="6" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fontSize=14;fontStyle=1" value="Выполнение ДЗ" vertex="1">
+          <mxGeometry height="60" width="180" x="960" y="370" as="geometry" />
+        </mxCell>
+        <mxCell id="7" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fontSize=14;fontStyle=1" value="Уведомление" vertex="1">
+          <mxGeometry height="60" width="180" x="-110" y="670" as="geometry" />
+        </mxCell>
+        <mxCell id="8" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fontSize=14;fontStyle=1" value="Пользователь" vertex="1">
+          <mxGeometry height="60" width="180" x="410" y="670" as="geometry" />
+        </mxCell>
+        <mxCell id="9" parent="1" style="rhombus;whiteSpace=wrap;html=1;fontSize=12;" value="Содержать" vertex="1">
+          <mxGeometry height="60" width="140" x="730" y="70" as="geometry" />
+        </mxCell>
+        <mxCell id="10" parent="1" style="rhombus;whiteSpace=wrap;html=1;fontSize=12;" value="Включать" vertex="1">
+          <mxGeometry height="60" width="140" x="430" y="220" as="geometry" />
+        </mxCell>
+        <mxCell id="11" parent="1" style="rhombus;whiteSpace=wrap;html=1;fontSize=12;" value="Относить" vertex="1">
+          <mxGeometry height="60" width="140" x="230" y="220" as="geometry" />
+        </mxCell>
+        <mxCell id="12" parent="1" style="rhombus;whiteSpace=wrap;html=1;fontSize=12;" value="Задавать" vertex="1">
+          <mxGeometry height="60" width="140" x="430" y="520" as="geometry" />
+        </mxCell>
+        <mxCell id="13" parent="1" style="rhombus;whiteSpace=wrap;html=1;fontSize=12;" value="Создавать" vertex="1">
+          <mxGeometry height="60" width="140" x="230" y="520" as="geometry" />
+        </mxCell>
+        <mxCell id="14" parent="1" style="rhombus;whiteSpace=wrap;html=1;fontSize=12;" value="Выполнять" vertex="1">
+          <mxGeometry height="60" width="140" x="690" y="530" as="geometry" />
+        </mxCell>
+        <mxCell id="15" parent="1" style="rhombus;whiteSpace=wrap;html=1;fontSize=12;" value="Назначать" vertex="1">
+          <mxGeometry height="60" width="140" x="710" y="370" as="geometry" />
+        </mxCell>
+        <mxCell id="16" parent="1" style="rhombus;whiteSpace=wrap;html=1;fontSize=12;" value="Получать" vertex="1">
+          <mxGeometry height="60" width="140" x="170" y="670" as="geometry" />
+        </mxCell>
+        <mxCell id="17" edge="1" parent="1" source="9" style="edgeStyle=none;html=1;strokeWidth=1;strokeColor=#000000;endArrow=classic;endFill=1;" target="2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="19" edge="1" parent="1" source="9" style="edgeStyle=none;html=1;strokeWidth=1;strokeColor=#000000;endArrow=doubleBlock;endFill=1;" target="3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="21" edge="1" parent="1" source="10" style="edgeStyle=none;html=1;strokeWidth=1;strokeColor=#000000;endArrow=classic;endFill=1;" target="2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="23" edge="1" parent="1" source="10" style="edgeStyle=none;html=1;strokeWidth=1;strokeColor=#000000;endArrow=block;endFill=1;dashed=1;" target="5">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="25" edge="1" parent="1" source="11" style="edgeStyle=none;html=1;strokeWidth=1;strokeColor=#000000;endArrow=classic;endFill=1;" target="2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="27" edge="1" parent="1" source="11" style="edgeStyle=none;html=1;strokeWidth=1;strokeColor=#000000;endArrow=doubleBlock;endFill=1;dashed=1;" target="4">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="29" edge="1" parent="1" source="12" style="edgeStyle=none;html=1;strokeWidth=1;strokeColor=#000000;endArrow=classic;endFill=1;" target="8">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="31" edge="1" parent="1" source="12" style="edgeStyle=none;html=1;strokeWidth=1;strokeColor=#000000;endArrow=doubleBlock;endFill=1;dashed=1;" target="5">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="33" edge="1" parent="1" source="13" style="edgeStyle=none;html=1;strokeWidth=1;strokeColor=#000000;endArrow=classic;endFill=1;" target="8">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="35" edge="1" parent="1" source="13" style="edgeStyle=none;html=1;strokeWidth=1;strokeColor=#000000;endArrow=doubleBlock;endFill=1;dashed=1;" target="4">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="37" edge="1" parent="1" source="14" style="edgeStyle=none;html=1;strokeWidth=1;strokeColor=#000000;endArrow=classic;endFill=1;" target="8">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="39" edge="1" parent="1" source="14" style="edgeStyle=none;html=1;strokeWidth=1;strokeColor=#000000;endArrow=doubleBlock;endFill=1;dashed=1;" target="6">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="41" edge="1" parent="1" source="15" style="edgeStyle=none;html=1;strokeWidth=1;strokeColor=#000000;endArrow=classic;endFill=1;" target="5">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="43" edge="1" parent="1" source="15" style="edgeStyle=none;html=1;strokeWidth=1;strokeColor=#000000;endArrow=doubleBlock;endFill=1;dashed=1;" target="6">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="45" edge="1" parent="1" source="16" style="edgeStyle=none;html=1;strokeWidth=1;strokeColor=#000000;endArrow=classic;endFill=1;" target="8">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="47" edge="1" parent="1" source="16" style="edgeStyle=none;html=1;strokeWidth=1;strokeColor=#000000;endArrow=doubleBlock;endFill=1;dashed=1;" target="7">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

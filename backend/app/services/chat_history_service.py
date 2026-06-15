@@ -57,6 +57,27 @@ def save_exchange(
     db.commit()
     _trim_old(db, user_id, cid)
 
+def save_message(
+    db: Session,
+    *,
+    user_id: int,
+    course_id: str,
+    role: str,
+    content: str,
+) -> None:
+    if not user_id or not content.strip():
+        return
+    cid = course_id or "default"
+    db.add(
+        ChatMessage(
+            user_id=user_id,
+            course_id=cid,
+            role=role,
+            content=content.strip()[:12000],
+        )
+    )
+    db.commit()
+    _trim_old(db, user_id, cid)
 
 def _trim_old(db: Session, user_id: int, course_id: str) -> None:
     rows = (

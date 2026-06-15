@@ -23,12 +23,20 @@ from app.services.chat_history_service import (
     get_recent_history,
     merge_history,
     save_exchange,
+    save_message,
 )
 from app.services.metrics_service import record_metric
-from app.services.weak_topics_service import build_weak_topics_prompt_block
-from app.models.user import User, UserRole
-from app.services.auth_service import get_current_user, get_current_user_optional
-from app.schemas.adaptive import ChatHistoryMessage
+from typing import AsyncIterator, Any
+from app.services.auth_service import get_current_user, get_current_user_optional, DummyUser
+
+class ChatHistoryMessage(BaseModel):
+    role: str
+    content: str
+
+class SaveMessageRequest(BaseModel):
+    course_id: str = "default"
+    role: str
+    content: str
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -170,7 +178,7 @@ async def stream_rag_response(
     course_id: str,
     course_name: str,
     page_context: dict = {},
-    current_user: User = None,
+    current_user: Any = None,
     db: Session | None = None,
 ) -> AsyncIterator[str]:
     full_response = ""
@@ -180,11 +188,6 @@ async def stream_rag_response(
             from app.utils.navigation_prompt import build_db_navigation_routes_list
             role = current_user.role if current_user else None
             ctx["db_nav_routes"] = build_db_navigation_routes_list(db, role=role, current_course_id=course_id)
-            
-        if current_user and current_user.role == UserRole.student.value and db:
-            block = build_weak_topics_prompt_block(db, current_user.id, course_id)
-            if block:
-                ctx["weak_topics_prompt"] = block
 
         t_rag = time.perf_counter()
         _docs, context, sources = await retrieve_context_for_chat(message, course_id)
@@ -268,19 +271,35 @@ def chat_history(
     course_id: str = Query("default"),
     limit: int = Query(12, ge=1, le=40),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user_optional),
+    current_user: Any = Depends(get_current_user_optional),
 ):
     if not current_user:
         return []
     rows = get_recent_history(db, current_user.id, course_id, limit=limit)
     return [ChatHistoryMessage(**r) for r in rows]
 
+@router.post("/chat/save_message")
+def api_save_message(
+    request: SaveMessageRequest,
+    db: Session = Depends(get_db),
+    current_user: Any = Depends(get_current_user_optional),
+):
+    if current_user:
+        save_message(
+            db,
+            user_id=current_user.id,
+            course_id=request.course_id,
+            role=request.role,
+            content=request.content,
+        )
+    return {"status": "ok"}
+
 
 @router.post("/chat/stream")
 async def chat_stream(
     request: ChatRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user_optional),
+    current_user: Any = Depends(get_current_user_optional),
 ):
     return StreamingResponse(
         stream_rag_response(
@@ -305,16 +324,12 @@ async def stream_rag_voice_response(
     course_id: str,
     course_name: str,
     page_context: dict = {},
-    current_user: User = None,
+    current_user: Any = None,
     db: Session | None = None,
 ) -> AsyncIterator[str]:
     full_response = ""
     try:
         ctx = dict(page_context or {})
-        if current_user and current_user.role == UserRole.student.value and db:
-            block = build_weak_topics_prompt_block(db, current_user.id, course_id)
-            if block:
-                ctx["weak_topics_prompt"] = block
 
         t_rag = time.perf_counter()
         _docs, context, sources = await retrieve_context_for_chat(message, course_id)
@@ -419,7 +434,7 @@ async def stream_rag_voice_response(
 async def chat_voice(
     request: ChatRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user_optional),
+    current_user: Any = Depends(get_current_user_optional),
 ):
     return StreamingResponse(
         stream_rag_voice_response(
@@ -442,7 +457,7 @@ async def chat_voice(
 async def chat(
     request: ChatRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user_optional),
+    current_user: Any = Depends(get_current_user_optional),
 ):
     try:
         ctx = dict(request.page_context or {})

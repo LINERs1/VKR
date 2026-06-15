@@ -20,6 +20,7 @@ class Homework(Base):
     title = Column(String, nullable=False)
     description = Column(Text, nullable=False)
     content_json = Column(Text, nullable=True)
+    ai_criteria = Column(Text, nullable=True)
     is_demo = Column(Boolean, default=False, nullable=False)
 
     course = relationship("Course", back_populates="homeworks")

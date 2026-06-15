@@ -9,9 +9,7 @@ export function getApiBaseUrl(endpoint = '') {
       endpoint.startsWith('/analytics') ||
       endpoint.startsWith('/adaptive') ||
       endpoint.startsWith('/ultravox') ||
-      endpoint.startsWith('/navigation') ||
-      endpoint.startsWith('/audit') ||
-      endpoint.startsWith('/embeddable')) {
+      endpoint.startsWith('/navigation')) {
     return 'http://127.0.0.1:8000/api'
   }
   
@@ -63,7 +61,19 @@ export async function apiFetch(endpoint, options = {}) {
   const contentType = res.headers.get('content-type')
   if (contentType && contentType.includes('application/json')) {
     const data = await res.json()
-    if (!res.ok) throw new Error(data.detail || 'API Error')
+    if (!res.ok) {
+      let msg = 'API Error'
+      if (data.detail) {
+        if (typeof data.detail === 'string') {
+          msg = data.detail
+        } else if (Array.isArray(data.detail)) {
+          msg = data.detail.map(d => d.msg || JSON.stringify(d)).join(', ')
+        } else {
+          msg = JSON.stringify(data.detail)
+        }
+      }
+      throw new Error(msg)
+    }
     return data
   }
 
@@ -133,6 +143,8 @@ export const notificationsApi = {
 export const chatApi = {
   getHistory: (courseId, limit = 12) =>
     apiFetch(`/chat/history?course_id=${encodeURIComponent(courseId || 'default')}&limit=${limit}`),
+  saveMessage: (body) =>
+    apiFetch('/chat/save_message', { method: 'POST', body: JSON.stringify(body) }),
 }
 
 /** API навигации ИИ-ассистента (embeddable — курсы передаёт хост-платформа). */
@@ -143,24 +155,7 @@ export const navigationApi = {
     apiFetch('/navigation/validate', { method: 'POST', body: JSON.stringify(body) }),
   adjacentLesson: (body) =>
     apiFetch('/navigation/adjacent-lesson', { method: 'POST', body: JSON.stringify(body) }),
-  validateHighlight: (body) =>
-    apiFetch('/navigation/validate-highlight', { method: 'POST', body: JSON.stringify(body) }),
   syncStatus: () => apiFetch('/navigation/sync-status'),
-}
-
-export const auditApi = {
-  listEvents: (params = {}) => {
-    const q = new URLSearchParams()
-    if (params.days) q.set('days', params.days)
-    if (params.action) q.set('action', params.action)
-    if (params.limit) q.set('limit', params.limit)
-    const qs = q.toString()
-    return apiFetch(`/audit/events${qs ? `?${qs}` : ''}`)
-  },
-}
-
-export const embeddableApi = {
-  contract: () => apiFetch('/embeddable/contract'),
 }
 
 export const workshopApi = {

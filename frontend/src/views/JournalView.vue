@@ -6,7 +6,7 @@ import { useAuth } from '../composables/useAuth'
 import GlassHeader from '../components/GlassHeader.vue'
 
 const router = useRouter()
-const { fetchUser } = useAuth()
+const { fetchUser, hasAccess } = useAuth()
 
 const homeworks = ref([])
 const courses = ref([])
@@ -14,7 +14,7 @@ const loading = ref(true)
 
 onMounted(async () => {
   const user = await fetchUser()
-  if (!user || user.role !== 'teacher') {
+  if (!user || !hasAccess('/journal')) {
     router.push('/homeworks')
     return
   }

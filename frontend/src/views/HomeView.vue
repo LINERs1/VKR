@@ -6,7 +6,7 @@ import { useAuth } from '../composables/useAuth'
 import NotificationsBell from '../components/NotificationsBell.vue'
 import SettingsModal from '../components/SettingsModal.vue'
 
-const { user, fetchUser, logout } = useAuth()
+const { user, fetchUser, logout, hasAccess } = useAuth()
 const showSettings = ref(false)
 const courses = ref([])
 const loading = ref(true)
@@ -53,10 +53,10 @@ onMounted(async () => {
           </nav>
 
           <div class="topbar-actions" v-if="user">
-            <router-link to="/admin" class="glass-link" v-if="user.role === 'admin'">Панель управления</router-link>
-            <router-link to="/journal" class="glass-link" v-if="user.role === 'teacher'">Журнал</router-link>
-            <router-link to="/analytics" class="glass-link" v-if="user.role === 'teacher'">Аналитика</router-link>
-            <router-link to="/homeworks" class="glass-link">Задания</router-link>
+            <router-link to="/admin" class="glass-link" v-if="hasAccess('/admin')">Панель управления</router-link>
+            <router-link to="/journal" class="glass-link" v-if="hasAccess('/journal')">Журнал</router-link>
+            <router-link to="/analytics" class="glass-link" v-if="hasAccess('/analytics')">Аналитика</router-link>
+            <router-link to="/homeworks" class="glass-link" v-if="hasAccess('/homeworks')">Задания</router-link>
             
             <div class="topbar-divider"></div>
 

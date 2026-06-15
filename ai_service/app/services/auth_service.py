@@ -7,7 +7,6 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 from app.database import get_db
-from app.models.user import User
 
 # TODO: Move to config/env
 SECRET_KEY = os.getenv("JWT_SECRET_KEY", "super-secret-key-for-diplom-ai-123")

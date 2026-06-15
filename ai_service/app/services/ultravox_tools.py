@@ -5,6 +5,7 @@ _NAVIGATE_TOOL = {
         "modelToolName": "navigatePage",
         "description": (
             "Переводит пользователя на страницу платформы (курс, журнал, профиль, главная, ДЗ). "
+            "КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО вызывать этот инструмент во время помощи с ДЗ или ответов на вопросы. Вызывай ТОЛЬКО по прямой команде (например: 'перейди на главную'). "
             "ДЛЯ УРОКОВ НЕ ИСПОЛЬЗОВАТЬ! Для уроков используй openLesson. "
             "ВНИМАНИЕ: Если пользователь просит открыть курс, которого нет в списке доступных, "
             "КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО переходить на другой курс или выдумывать пути. "
@@ -23,6 +24,15 @@ _NAVIGATE_TOOL = {
                 },
                 "required": True,
             },
+            {
+                "name": "highlight_text",
+                "location": "PARAMETER_LOCATION_BODY",
+                "schema": {
+                    "description": "Фрагмент текста со страницы (от 1 до 8 слов) для подсветки. Передавай только если пользователь явно попросил показать или найти фрагмент.",
+                    "type": "string",
+                },
+                "required": False,
+            },
         ],
         "client": {},
     }
@@ -33,6 +43,7 @@ _OPEN_LESSON_TOOL = {
         "modelToolName": "openLesson",
         "description": (
             "Открывает конкретный урок курса. "
+            "КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО вызывать во время помощи с ДЗ или ответов на вопросы. Вызывай ТОЛЬКО по прямой команде 'открой урок'. "
             "Используй ТОЛЬКО этот инструмент для перехода на уроки (вместо navigatePage). "
             "Сначала скажи «Открываю урок», затем вызови инструмент."
         ),
@@ -59,7 +70,7 @@ _OPEN_LESSON_TOOL = {
                 "name": "highlight_text",
                 "location": "PARAMETER_LOCATION_BODY",
                 "schema": {
-                    "description": "Кусок текста (от 1 до 5 слов) для подсветки на странице.",
+                    "description": "Фрагмент текста из урока (от 1 до 8 слов) для точной подсветки на странице. Старайся выделять уникальные словосочетания, но можно и одно слово, если оно ключевое.",
                     "type": "string",
                 },
                 "required": False,
@@ -133,21 +144,10 @@ _TEACHER_TOOLS = [
             "modelToolName": "reviewHomework",
             "description": (
                 "Запускает автоматическую ИИ-проверку домашнего задания выбранного ученика. "
-                "Сначала спроси подтверждение («Проверить работу … с помощью ИИ?»). "
-                "Только после явного «да» вызови с confirm=true. "
-                "Работа должна быть в статусе submitted; если graded — не вызывай."
+                "Только если работа сдана и ещё не оценена (submitted). "
+                "Если работа уже оценена (graded) — не вызывай, ответь по данным на экране. "
+                "Проверка на сервере может занять до нескольких минут."
             ),
-            "dynamicParameters": [
-                {
-                    "name": "confirm",
-                    "location": "PARAMETER_LOCATION_BODY",
-                    "schema": {
-                        "description": "true — только после явного согласия преподавателя",
-                        "type": "boolean",
-                    },
-                    "required": False,
-                },
-            ],
             "client": {},
         }
     },
@@ -158,16 +158,6 @@ _TEACHER_TOOLS = [
                 "Запускает массовую фоновую ИИ-проверку всех несданных домашних заданий, "
                 "которые ещё не проверялись ИИ. "
                 "Вызывай, если преподаватель просит «проверь все ДЗ»."
-            ),
-            "client": {},
-        }
-    },
-    {
-        "temporaryTool": {
-            "modelToolName": "getTeacherSummary",
-            "description": (
-                "Сводка журнала: средний балл, кто не сдал ДЗ, что ждёт проверки. "
-                "Вызывай на вопросы «кто не сдал», «средний балл», «что на проверке»."
             ),
             "client": {},
         }
@@ -222,16 +212,6 @@ _TEACHER_TOOLS = [
 _STUDENT_TOOLS = [
     {
         "temporaryTool": {
-            "modelToolName": "getHomeworkReminders",
-            "description": (
-                "Список несданных домашних заданий ученика. "
-                "Вызывай, если ученик спрашивает «что мне сделать», «какие ДЗ остались»."
-            ),
-            "client": {},
-        }
-    },
-    {
-        "temporaryTool": {
             "modelToolName": "getHomeworkHint",
             "description": (
                 "Сократическая подсказка по текущему домашнему заданию без готового решения. "
@@ -242,34 +222,38 @@ _STUDENT_TOOLS = [
     },
 ]
 
-_COMMON_TOOLS = [
+_ADMIN_TOOLS = [
     {
         "temporaryTool": {
-            "modelToolName": "getNotifications",
+            "modelToolName": "adminGetReport",
             "description": (
-                "Получает список новых оповещений пользователя. "
-                "Оповещения содержат ссылки для navigatePage."
+                "Запрашивает у сервера аналитический отчет для администратора платформы. "
+                "Вызывай этот инструмент ТОЛЬКО если пользователь попросил отчет и ты УЖЕ уточнил у него тип отчета."
             ),
-            "client": {},
-        }
-    },
-    {
-        "temporaryTool": {
-            "modelToolName": "clearNotifications",
-            "description": "Очищает все оповещения пользователя.",
+            "dynamicParameters": [
+                {
+                    "name": "report_type",
+                    "location": "PARAMETER_LOCATION_BODY",
+                    "schema": {
+                        "description": "Тип запрашиваемого отчета: 'summary' (сводный) или 'detailed' (детальный)",
+                        "type": "string",
+                        "enum": ["summary", "detailed"],
+                    },
+                    "required": True,
+                },
+            ],
             "client": {},
         }
     },
 ]
 
+_COMMON_TOOLS = []
 
-def build_voice_tools(role: str | None, granted: set[str] | None = None) -> list:
-    """Строгий allowlist инструментов по роли и permissions[]."""
-    from app.services.permissions import filter_tools_by_permissions, resolve_permissions
 
+def build_voice_tools(role: str | None) -> list:
+    """Строгий allowlist инструментов по роли: student / teacher / admin."""
     role_norm = (role or "student").lower()
     is_teacher = role_norm in ("teacher", "admin")
-    perms = granted if granted is not None else resolve_permissions(role_norm)
 
     tools = [
         _RAG_TOOL,
@@ -284,5 +268,8 @@ def build_voice_tools(role: str | None, granted: set[str] | None = None) -> list
     elif role_norm == "student":
         tools.extend(_STUDENT_TOOLS)
 
+    if role_norm == "admin":
+        tools.extend(_ADMIN_TOOLS)
+
     tools.extend(_COMMON_TOOLS)
-    return filter_tools_by_permissions(tools, perms)
+    return tools

@@ -47,7 +47,7 @@ import { apiFetch } from '../api'
 import GlassHeader from '../components/GlassHeader.vue'
 
 const router = useRouter()
-const { fetchUser } = useAuth()
+const { fetchUser, hasAccess } = useAuth()
 const user = ref(null)
 const templates = ref([])
 const loading = ref(true)
@@ -55,7 +55,7 @@ const loading = ref(true)
 onMounted(async () => {
   user.value = await fetchUser()
   if (!user.value) return router.push('/login')
-  if (user.value.role !== 'teacher') return router.push('/homeworks')
+  if (!hasAccess('/homeworks/workshop', { adminOrTeacherOnly: true })) return router.push('/homeworks')
   await load()
 })
 

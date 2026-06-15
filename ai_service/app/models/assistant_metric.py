@@ -11,7 +11,7 @@ class AssistantMetric(Base):
     __tablename__ = "assistant_metrics"
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    user_id = Column(Integer, nullable=True, index=True)
     event_type = Column(String, nullable=False, index=True)
     course_id = Column(String, nullable=True)
     duration_ms = Column(Float, nullable=True)

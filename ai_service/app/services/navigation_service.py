@@ -14,7 +14,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 STATIC_PATHS = frozenset({
-    "/", "/profile", "/journal", "/homeworks", "/analytics", "/homeworks/workshop",
+    "/", "/profile", "/journal", "/homeworks", "/analytics", "/homeworks/workshop", "/admin",
 })
 
 # Специфичные ключи раньше; широкие (python) — в конце
@@ -170,6 +170,7 @@ def resolve_path_or_query(
     path_or_query: str,
     courses: list[CourseNavItem],
     *,
+    custom_paths: set[str] = None,
     ambiguity_gap: float = 0.08,
 ) -> ResolveResult:
     raw = (path_or_query or "").strip()
@@ -182,7 +183,8 @@ def resolve_path_or_query(
 
     pathname, query = _split_path_query(normalized)
 
-    if pathname in STATIC_PATHS:
+    all_paths = STATIC_PATHS | (custom_paths or set())
+    if pathname in all_paths:
         return ResolveResult(status="static", path=pathname + (_query_suffix(query)), query=query)
     if pathname.startswith("/homeworks/") or pathname.startswith("/journal/"):
         return ResolveResult(status="static", path=pathname + (_query_suffix(query)), query=query)
@@ -229,9 +231,9 @@ def _query_suffix(query: dict[str, str]) -> str:
     return "?" + urlencode(query)
 
 
-def validate_navigate_path(path: str, courses: list[CourseNavItem]) -> ResolveResult:
+def validate_navigate_path(path: str, courses: list[CourseNavItem], custom_paths: set[str] = None) -> ResolveResult:
     """Проверка пути из [NAVIGATE:...] перед отправкой на виджет."""
-    res = resolve_path_or_query(path, courses)
+    res = resolve_path_or_query(path, courses, custom_paths=custom_paths)
     if res.status == "not_found":
         return res
     if res.status == "ambiguous":

@@ -8,7 +8,7 @@ import SettingsModal from '../components/SettingsModal.vue'
 import GlassHeader from '../components/GlassHeader.vue'
 
 const router = useRouter()
-const { fetchUser, logout } = useAuth()
+const { fetchUser, logout, hasAccess } = useAuth()
 
 const user = ref(null)
 const homeworks = ref([])
@@ -126,6 +126,12 @@ const stats = computed(() => {
   }
 })
 
+const roleLabel = computed(() => {
+  if (user.value?.role === 'admin') return 'Администратор'
+  if (user.value?.role === 'teacher') return 'Преподаватель'
+  return 'Студент'
+})
+
 const recentGraded = computed(() => {
   if (user.value?.role !== 'student') return []
   return homeworks.value
@@ -199,7 +205,7 @@ onMounted(async () => {
         <div class="user-displayname">{{ displayName }}</div>
         <div class="user-handle">@{{ user.username }}</div>
         <div class="role-badge" :class="user.role">
-          {{ user.role === 'teacher' ? 'Преподаватель' : 'Студент' }}
+          {{ roleLabel }}
         </div>
         <div class="user-email-display" v-if="user.email">{{ user.email }}</div>
 
@@ -213,11 +219,11 @@ onMounted(async () => {
           </div>
           <div class="kpi-pill">
             <span class="kp-val amber">{{ stats.pendingAction }}</span>
-            <span class="kp-lbl">{{ user.role === 'teacher' ? 'Ждут проверки' : 'Ожидают выполнения' }}</span>
+            <span class="kp-lbl">{{ ['teacher', 'admin'].includes(user.role) ? 'Ждут проверки' : 'Ожидают выполнения' }}</span>
           </div>
           <div class="kpi-pill">
-            <span class="kp-val">{{ user.role === 'teacher' ? stats.totalAssigned : stats.totalCompleted }}</span>
-            <span class="kp-lbl">{{ user.role === 'teacher' ? 'Выдано ДЗ' : 'Сдано ДЗ' }}</span>
+            <span class="kp-val">{{ ['teacher', 'admin'].includes(user.role) ? stats.totalAssigned : stats.totalCompleted }}</span>
+            <span class="kp-lbl">{{ ['teacher', 'admin'].includes(user.role) ? 'Выдано ДЗ' : 'Сдано ДЗ' }}</span>
           </div>
         </div>
 
@@ -229,14 +235,14 @@ onMounted(async () => {
             </svg>
             Задания
           </router-link>
-          <router-link to="/journal" class="card-nav-btn" v-if="user.role === 'teacher'">
+          <router-link to="/journal" class="card-nav-btn" v-if="hasAccess('/journal')">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
               <path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z"/>
               <path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z"/>
             </svg>
             Журнал
           </router-link>
-          <router-link to="/analytics" class="card-nav-btn" v-if="user.role === 'teacher'">
+          <router-link to="/analytics" class="card-nav-btn" v-if="hasAccess('/analytics')">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
               <line x1="18" y1="20" x2="18" y2="10"/>
               <line x1="12" y1="20" x2="12" y2="4"/>
@@ -281,7 +287,7 @@ onMounted(async () => {
               <div class="field">
                 <label class="field-label">Роль</label>
                 <div class="field-static">
-                  <input class="input disabled" :value="user.role === 'teacher' ? 'Преподаватель' : 'Студент'" disabled/>
+                  <input class="input disabled" :value="roleLabel" disabled/>
                 </div>
               </div>
             </div>
@@ -687,6 +693,7 @@ onMounted(async () => {
 }
 .role-badge.student { background: var(--accent-subtle); color: #818cf8; }
 .role-badge.teacher { background: rgba(245,158,11,0.1); color: #f59e0b; }
+.role-badge.admin { background: rgba(239,68,68,0.1); color: #ef4444; }
 
 .user-email-display {
   font-size: 12px;

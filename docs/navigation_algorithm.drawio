@@ -1,0 +1,120 @@
+<mxfile host="app.diagrams.net">
+  <diagram id="KJGSpfcFbahtDb4gnPAX" name="Страница-1">
+    <mxGraphModel dx="1414" dy="760" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1169" pageHeight="827" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="3" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;" value="" vertex="1">
+          <mxGeometry height="1000" width="780" x="10" y="50" as="geometry" />
+        </mxCell>
+        <mxCell id="RZzmdaDWRIXeRx6_o959-112" parent="1" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;" value="" vertex="1">
+          <mxGeometry height="30" width="30" x="385" y="1005" as="geometry" />
+        </mxCell>
+        <mxCell id="2" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=14;fontStyle=1;" value="Алгоритм навигации по образовательной платформе" vertex="1">
+          <mxGeometry height="35" width="780" x="10" y="10" as="geometry" />
+        </mxCell>
+        <mxCell id="10" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#000000;strokeColor=#000000;" value="" vertex="1">
+          <mxGeometry height="16" width="16" x="392" y="72" as="geometry" />
+        </mxCell>
+        <mxCell id="11" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;" value="Получение голосового запроса пользователя" vertex="1">
+          <mxGeometry height="45" width="360" x="220" y="108" as="geometry" />
+        </mxCell>
+        <mxCell id="12" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;" value="Транскрибация речи (Ultravox)" vertex="1">
+          <mxGeometry height="45" width="360" x="220" y="173" as="geometry" />
+        </mxCell>
+        <mxCell id="13" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;" value="Анализ намерения и выявление навигационного запроса (LLM)" vertex="1">
+          <mxGeometry height="45" width="360" x="220" y="238" as="geometry" />
+        </mxCell>
+        <mxCell id="14" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;" value="Определение целевого раздела образовательной платформы" vertex="1">
+          <mxGeometry height="45" width="360" x="220" y="303" as="geometry" />
+        </mxCell>
+        <mxCell id="20" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;align=left;verticalAlign=top;spacingLeft=6;spacingTop=5;fontSize=10;fontStyle=2;" value="N путей поиска в навигационном графе" vertex="1">
+          <mxGeometry height="105" width="760" x="20" y="368" as="geometry" />
+        </mxCell>
+        <mxCell id="21" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fontSize=10;" value="Поиск_пути_1&#xa;По точному совпадению" vertex="1">
+          <mxGeometry height="60" width="210" x="40" y="393" as="geometry" />
+        </mxCell>
+        <mxCell id="22" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fontSize=10;" value="Поиск_пути_2&#xa;По частичному совпадению" vertex="1">
+          <mxGeometry height="60" width="210" x="285" y="393" as="geometry" />
+        </mxCell>
+        <mxCell id="23" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fontSize=10;" value="Поиск_пути_N&#xa;По категории платформы" vertex="1">
+          <mxGeometry height="60" width="210" x="530" y="393" as="geometry" />
+        </mxCell>
+        <mxCell id="24" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;" value="Маршрут навигации определён" vertex="1">
+          <mxGeometry height="40" width="360" x="220" y="493" as="geometry" />
+        </mxCell>
+        <mxCell id="30" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;" value="Формирование команды навигации (path, aihl)" vertex="1">
+          <mxGeometry height="45" width="360" x="220" y="553" as="geometry" />
+        </mxCell>
+        <mxCell id="31" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;" value="Отправка навигационной команды на клиент (Tool Call)" vertex="1">
+          <mxGeometry height="45" width="360" x="220" y="618" as="geometry" />
+        </mxCell>
+        <mxCell id="32" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;" value="Выполнение перехода на целевую страницу (router.push)" vertex="1">
+          <mxGeometry height="45" width="360" x="220" y="683" as="geometry" />
+        </mxCell>
+        <mxCell id="40" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;align=left;verticalAlign=top;spacingLeft=6;spacingTop=5;fontSize=10;fontStyle=2;" value="K стратегий поиска фрагмента в DOM (при наличии подсветки)" vertex="1">
+          <mxGeometry height="105" width="760" x="20" y="748" as="geometry" />
+        </mxCell>
+        <mxCell id="41" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fontSize=10;" value="Стратегия_1&#xa;Поиск полной фразы" vertex="1">
+          <mxGeometry height="60" width="210" x="40" y="773" as="geometry" />
+        </mxCell>
+        <mxCell id="42" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fontSize=10;" value="Стратегия_2&#xa;Поиск первых 3 слов" vertex="1">
+          <mxGeometry height="60" width="210" x="285" y="773" as="geometry" />
+        </mxCell>
+        <mxCell id="43" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fontSize=10;" value="Стратегия_K&#xa;Стем-поиск (морфология)" vertex="1">
+          <mxGeometry height="60" width="210" x="530" y="773" as="geometry" />
+        </mxCell>
+        <mxCell id="44" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;" value="Фрагмент обнаружен и подсвечен (ai-highlight-block)" vertex="1">
+          <mxGeometry height="40" width="360" x="220" y="873" as="geometry" />
+        </mxCell>
+        <mxCell id="50" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;" value="Голосовое подтверждение навигации пользователю" vertex="1">
+          <mxGeometry height="45" width="360" x="220" y="933" as="geometry" />
+        </mxCell>
+        <mxCell id="60" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#000000;strokeColor=#000000;" value="" vertex="1">
+          <mxGeometry height="16" width="16" x="392" y="1012" as="geometry" />
+        </mxCell>
+        <mxCell id="100" edge="1" parent="1" source="10" style="edgeStyle=orthogonalEdgeStyle;html=1;" target="11" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="101" edge="1" parent="1" source="11" style="edgeStyle=orthogonalEdgeStyle;html=1;" target="12" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="102" edge="1" parent="1" source="12" style="edgeStyle=orthogonalEdgeStyle;html=1;" target="13" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="103" edge="1" parent="1" source="13" style="edgeStyle=orthogonalEdgeStyle;html=1;" target="14" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="104" edge="1" parent="1" source="14" style="edgeStyle=orthogonalEdgeStyle;html=1;" target="20" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="105" edge="1" parent="1" source="20" style="edgeStyle=orthogonalEdgeStyle;html=1;" target="24" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="106" edge="1" parent="1" source="24" style="edgeStyle=orthogonalEdgeStyle;html=1;" target="30" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="107" edge="1" parent="1" source="30" style="edgeStyle=orthogonalEdgeStyle;html=1;" target="31" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="108" edge="1" parent="1" source="31" style="edgeStyle=orthogonalEdgeStyle;html=1;" target="32" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="109" edge="1" parent="1" source="32" style="edgeStyle=orthogonalEdgeStyle;html=1;" target="40" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="110" edge="1" parent="1" source="40" style="edgeStyle=orthogonalEdgeStyle;html=1;" target="44" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="111" edge="1" parent="1" source="44" style="edgeStyle=orthogonalEdgeStyle;html=1;" target="50" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="112" edge="1" parent="1" source="50" style="edgeStyle=orthogonalEdgeStyle;html=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="RZzmdaDWRIXeRx6_o959-112" value="">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="400" y="1000" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

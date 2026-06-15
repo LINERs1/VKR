@@ -153,13 +153,9 @@ def build_reminders(db: Session, user: User) -> dict:
 
     recent_grades.sort(key=lambda x: x["homework_id"], reverse=True)
 
-    from app.services.weak_topics_service import format_weak_topics_message, get_weak_topics
-
-    weak = get_weak_topics(db, user.id, None, min_wrong=1, limit=5)
-    adaptive_msg = format_weak_topics_message(weak)
+    weak = []
+    adaptive_msg = ""
     base_msg = _student_reminder_message(pending, waiting)
-    if adaptive_msg:
-        base_msg = f"{base_msg} {adaptive_msg}".strip()
 
     return {
         "role": "student",

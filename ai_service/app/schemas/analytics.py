@@ -1,26 +1,5 @@
-from typing import List, Optional
-
+from typing import Optional
 from pydantic import BaseModel
-
-
-class WeakTopicItem(BaseModel):
-    topic: str
-    wrong_count: int
-    course_id: str
-    course_title: str = ""
-    lesson_id: Optional[int] = None
-    lesson_title: Optional[str] = None
-    last_wrong_at: Optional[str] = None
-
-
-class WeakTopicsResponse(BaseModel):
-    items: List[WeakTopicItem] = []
-    message: str = ""
-
-
-class ChatHistoryMessage(BaseModel):
-    role: str
-    content: str
 
 
 class AnalyticsEventIn(BaseModel):
@@ -53,7 +32,5 @@ class DetailedAnalyticsResponse(BaseModel):
     summary: dict
     daily_events: list
     perf_by_day: list
-    homework: dict
-    hw_by_day: list
     student_activity: list
     weak_topics: list

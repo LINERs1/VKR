@@ -4,14 +4,76 @@ import json
 import logging
 import re
 from pathlib import Path
+from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.constants import HOMEWORK_REVIEW_TEXT_LIMIT
-from app.models.homework import Homework, HomeworkAssignment
-from app.services.homework_template_service import parse_content
 from app.services.llm_service import get_homework_llm
 from app.utils.feedback_html import extract_error_fragments, normalize_teacher_feedback
+
+DEFAULT_CONTENT: dict[str, Any] = {
+    "intro": "Опишите цель задания и критерии оценки.",
+    "code_filename": "solution.py",
+    "code_template": "def solve():\n    pass\n",
+    "tests_code": "",
+    "quiz_items": [],
+    "written_part": "1. Ответьте своими словами на вопрос…\n2. …",
+    "reference_code": "",
+}
+
+
+def _normalize_quiz_items(raw: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        opts = item.get("options") or []
+        if not isinstance(opts, list):
+            opts = []
+        opts = [str(x).strip() for x in opts if str(x).strip()]
+        ci = item.get("correct_index", 0)
+        try:
+            ci = int(ci)
+        except (TypeError, ValueError):
+            ci = 0
+        lid = item.get("lesson_id")
+        try:
+            lesson_id = int(lid) if lid is not None and lid != "" else None
+        except (TypeError, ValueError):
+            lesson_id = None
+        out.append(
+            {
+                "question": str(item.get("question", "") or "").strip(),
+                "options": opts,
+                "correct_index": ci,
+                "topic": str(item.get("topic", "") or "").strip(),
+                "lesson_id": lesson_id,
+            }
+        )
+    return out
+
+
+def parse_content(raw: str | None) -> dict[str, Any]:
+    if not raw:
+        return dict(DEFAULT_CONTENT)
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            return dict(DEFAULT_CONTENT)
+        out = dict(DEFAULT_CONTENT)
+        for k in DEFAULT_CONTENT:
+            if k not in data:
+                continue
+            if k == "quiz_items":
+                out[k] = _normalize_quiz_items(data[k])
+            else:
+                out[k] = data[k]
+        return out
+    except json.JSONDecodeError:
+        return dict(DEFAULT_CONTENT)
 
 logger = logging.getLogger(__name__)
 
@@ -112,10 +174,6 @@ def _quiz_review_block_raw(content_json: str | None, student_quiz: dict | None) 
     return "\n".join(lines)
 
 
-def _quiz_review_block(homework: Homework, assignment: HomeworkAssignment) -> str:
-    return _quiz_review_block_raw(homework.content_json, assignment.student_quiz)
-
-
 def review_assignment_raw(
     *,
     assignment_id: int,
@@ -181,16 +239,3 @@ def review_assignment_raw(
         "suggested_grade": suggested_grade,
         "error_fragments": error_fragments,
     }
-
-
-def review_assignment(homework: Homework, assignment: HomeworkAssignment) -> dict:
-    return review_assignment_raw(
-        assignment_id=assignment.id,
-        username=assignment.student.username,
-        homework_description=homework.description,
-        student_code=assignment.student_code or "",
-        student_text=assignment.student_text or "",
-        content_json=homework.content_json or "",
-        student_quiz=assignment.student_quiz,
-        is_demo=bool(getattr(homework, "is_demo", False)),
-    )

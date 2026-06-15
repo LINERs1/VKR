@@ -247,6 +247,22 @@ def chat_history(
     rows = get_recent_history(db, current_user.id, course_id, limit=limit)
     return [ChatHistoryMessage(**r) for r in rows]
 
+class SaveMessageRequest(BaseModel):
+    course_id: str = "default"
+    role: str
+    content: str
+
+@router.post("/chat/save_message")
+def api_save_message(
+    request: SaveMessageRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_optional),
+):
+    if current_user:
+        from app.services.chat_history_service import save_message
+        save_message(db, user_id=current_user.id, course_id=request.course_id, role=request.role, content=request.content)
+    return {"status": "ok"}
+
 
 @router.post("/chat/stream")
 async def chat_stream(

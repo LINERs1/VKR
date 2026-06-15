@@ -19,9 +19,9 @@ class NavNode(Base):
     depth = Column(Integer, default=0)
     
     # Связи (edges, где текущий узел — источник)
-    outgoing_edges = relationship("NavEdge", foreign_keys="[NavEdge.source_node_id]", back_populates="source_node")
+    outgoing_edges = relationship("NavEdge", foreign_keys="[NavEdge.source_node_id]", back_populates="source_node", cascade="all, delete-orphan")
     # Связи (edges, где текущий узел — цель)
-    incoming_edges = relationship("NavEdge", foreign_keys="[NavEdge.target_node_id]", back_populates="target_node")
+    incoming_edges = relationship("NavEdge", foreign_keys="[NavEdge.target_node_id]", back_populates="target_node", cascade="all, delete-orphan")
     
     # Роли, которым доступен узел
     access_rules = relationship("NodeAccessRule", back_populates="node", cascade="all, delete-orphan")

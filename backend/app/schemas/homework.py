@@ -35,6 +35,7 @@ class HomeworkBase(BaseModel):
     course_id: str
     title: str
     description: str
+    ai_criteria: Optional[str] = None
 
 class HomeworkCreate(HomeworkBase):
     student_ids: List[int]

@@ -6,7 +6,7 @@ import { useAuth } from '../composables/useAuth'
 
 const route = useRoute()
 const router = useRouter()
-const { fetchUser } = useAuth()
+const { fetchUser, hasAccess } = useAuth()
 
 const student = ref(null)
 const homeworks = ref([])
@@ -57,7 +57,7 @@ const stats = computed(() => {
 
 onMounted(async () => {
   const user = await fetchUser()
-  if (!user || user.role !== 'teacher') {
+  if (!user || !hasAccess('/students/' + route.params.id, { adminOrTeacherOnly: true })) {
     router.push('/homeworks')
     return
   }

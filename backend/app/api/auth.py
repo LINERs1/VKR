@@ -3,15 +3,19 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.user import User
-from app.schemas.user import UserCreate, UserResponse, Token, UpdateProfile, ChangePassword, UpdateSettings
+from app.schemas.user import UserCreate, UserResponse, Token, UpdateProfile, ChangePassword, UpdateSettings, ForgotPassword, ResetPassword
 from app.services.auth_service import (
     get_password_hash,
     verify_password,
     create_access_token,
     ACCESS_TOKEN_EXPIRE_MINUTES,
-    get_current_user
+    get_current_user,
+    SECRET_KEY,
+    ALGORITHM
 )
+from jose import jwt, JWTError
 from datetime import timedelta
+
 
 router = APIRouter()
 
@@ -24,10 +28,19 @@ def register(user_in: UserCreate, db: Session = Depends(get_db)):
             detail="The user with this username already exists in the system."
         )
     
+    if user_in.email:
+        email_exists = db.query(User).filter(User.email == user_in.email).first()
+        if email_exists:
+            raise HTTPException(
+                status_code=400,
+                detail="The user with this email already exists."
+            )
+    
     user = User(
         username=user_in.username,
+        email=user_in.email,
         password_hash=get_password_hash(user_in.password),
-        role=user_in.role.value
+        role="student"
     )
     db.add(user)
     db.commit()
@@ -109,3 +122,40 @@ def get_students(db: Session = Depends(get_db), current_user: User = Depends(get
     if current_user.role != "teacher":
         raise HTTPException(status_code=403, detail="Not a teacher")
     return db.query(User).filter(User.role == "student").all()
+@router.post("/forgot-password")
+def forgot_password(body: ForgotPassword, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == body.email).first()
+    if not user:
+        return {"ok": True, "message": "Если email существует, ссылка для сброса пароля отправлена."}
+    
+    expire = timedelta(minutes=30)
+    reset_token = create_access_token(data={"sub": user.email, "type": "password_reset"}, expires_delta=expire)
+    
+    print(f"\n======================================")
+    print(f"EMAIL SENT TO: {user.email}")
+    print(f"RESET TOKEN: {reset_token}")
+    print(f"======================================\n")
+    
+    return {"ok": True, "message": "Ссылка отправлена", "debug_token": reset_token}
+
+@router.post("/reset-password")
+def reset_password(body: ResetPassword, db: Session = Depends(get_db)):
+    try:
+        payload = jwt.decode(body.token, SECRET_KEY, algorithms=[ALGORITHM])
+        email: str = payload.get("sub")
+        token_type: str = payload.get("type")
+        if not email or token_type != "password_reset":
+            raise HTTPException(status_code=400, detail="Неверный или просроченный токен")
+    except JWTError:
+        raise HTTPException(status_code=400, detail="Неверный или просроченный токен")
+        
+    user = db.query(User).filter(User.email == email).first()
+    if not user:
+        raise HTTPException(status_code=400, detail="Пользователь не найден")
+        
+    if len(body.new_password) < 6:
+        raise HTTPException(status_code=422, detail="Новый пароль должен быть минимум 6 символов")
+        
+    user.password_hash = get_password_hash(body.new_password)
+    db.commit()
+    return {"ok": True, "message": "Пароль успешно сброшен"}

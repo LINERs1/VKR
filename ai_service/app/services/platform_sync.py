@@ -46,6 +46,7 @@ def check_course_sync(db: Session) -> dict:
             "⚠️ Nav sync: на платформе есть курсы без NavNode в ИИ (нужен webhook): %s",
             ", ".join(only_platform),
         )
+        auto_pull_missing_courses(db, platform_courses, only_platform)
     if not only_nav and not only_platform and platform_ids:
         logger.info("✅ Nav sync: %d курсов совпадают между ИИ и платформой", len(platform_ids))
     elif not platform_ids:
@@ -58,3 +59,77 @@ def check_course_sync(db: Session) -> dict:
         "only_on_platform": only_platform,
         "in_sync": not only_nav and not only_platform,
     }
+
+
+def auto_pull_missing_courses(db: Session, platform_courses: list[dict], missing_ids: list[str]):
+    """Автоматически вытягивает тексты недостающих курсов и сохраняет их в ИИ-сервис."""
+    from app.models.navigation import NavNode
+    from langchain_core.documents import Document
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
+    from app.services.rag_service import get_vector_store
+
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=100)
+    added_courses_count = 0
+    added_chunks_count = 0
+
+    for course in platform_courses:
+        course_id = str(course.get("id"))
+        if course_id not in missing_ids:
+            continue
+            
+        logger.info(f"Начинаю автоматическую загрузку курса: {course.get('title')}")
+        
+        # 1. Добавляем узел навигации в SQL базу ИИ-сервиса (чтобы ИИ знал этот путь)
+        nav_path = f"/courses/{course_id}"
+        existing_nav = db.query(NavNode).filter(NavNode.identifier == nav_path).first()
+        if not existing_nav:
+            new_nav = NavNode(
+                identifier=nav_path,
+                title=course.get("title") or f"Курс {course_id}",
+                description=course.get("description") or "",
+                node_type="course",
+            )
+            db.add(new_nav)
+            db.flush() # Получаем ID для нового узла
+
+            # Создаем связь (ребро) от Главной страницы к новому курсу
+            home_node = db.query(NavNode).filter(NavNode.identifier == "/").first()
+            if home_node:
+                from app.models.navigation import NavEdge
+                db.add(NavEdge(source_node_id=home_node.id, target_node_id=new_nav.id))
+                db.add(NavEdge(source_node_id=new_nav.id, target_node_id=home_node.id))
+
+            db.commit()
+
+        # 2. Обрабатываем уроки и добавляем тексты в векторную базу (ChromaDB)
+        lessons = course.get("lessons") or []
+        docs = []
+        for lesson in lessons:
+            content = lesson.get("content")
+            if not content:
+                continue
+                
+            # Создаем документ для векторной БД
+            doc = Document(
+                page_content=content,
+                metadata={
+                    "source": "lesson",
+                    "course_id": course_id,
+                    "lesson_id": str(lesson.get("id")),
+                    "title": lesson.get("title") or ""
+                }
+            )
+            docs.append(doc)
+
+        if docs:
+            # Нарезаем уроки на чанки
+            chunks = text_splitter.split_documents(docs)
+            # Сохраняем в векторное хранилище конкретного курса
+            store = get_vector_store(course_id)
+            store.add_documents(chunks)
+            added_chunks_count += len(chunks)
+            
+        added_courses_count += 1
+
+    if added_courses_count > 0:
+        logger.info(f"✅ Авто-загрузка завершена: добавлено курсов: {added_courses_count}, чанков текста: {added_chunks_count}")

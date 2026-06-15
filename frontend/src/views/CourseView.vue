@@ -1,10 +1,8 @@
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { marked } from 'marked'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuth } from '../composables/useAuth'
-import { useNotifications } from '../composables/useNotifications.js'
-import { highlightSearchKey } from '../utils/highlightUtils.js'
 import { adaptiveApi } from '../api'
 import { getApiBaseUrl } from '../api'
 import GlassHeader from '../components/GlassHeader.vue'
@@ -12,7 +10,6 @@ import GlassHeader from '../components/GlassHeader.vue'
 const route = useRoute()
 const router = useRouter()
 const { fetchUser } = useAuth()
-const { addToast } = useNotifications()
 
 const course = ref(null)
 const weakBanner = ref(null)
@@ -51,8 +48,9 @@ async function loadCourse(id) {
       const idx = Number(route.query.lesson_idx)
       if (idx > 0 && idx <= (course.value.lessons?.length || 0)) {
         targetLesson = course.value.lessons[idx - 1]
-        // Optionally update the URL to have the real lesson ID instead of idx
-        router.replace({ query: { lesson: targetLesson.id } })
+        // Сохраняем aihl и другие query-параметры при замене lesson_idx на реальный lesson ID
+        const { lesson_idx: _li, ...restQ } = route.query
+        router.replace({ query: { ...restQ, lesson: targetLesson.id } })
       }
     }
     currentLesson.value = targetLesson
@@ -70,16 +68,6 @@ async function loadCourse(id) {
 
 onMounted(() => {
   loadCourse(route.params.id)
-  if (typeof window !== 'undefined') {
-    window.addEventListener('eduai-highlight-text', (e) => {
-      const textToFind = e?.detail?.text || window.pendingHighlightText
-      if (textToFind) {
-        window.pendingHighlightText = null
-        setTimeout(() => highlightAndScrollToText(textToFind), 600)
-        setTimeout(() => highlightAndScrollToText(textToFind), 1400)
-      }
-    })
-  }
 })
 
 watch(() => route.params.id, (newId) => {
@@ -104,7 +92,8 @@ watch(
     if (idx > 0 && idx <= (course.value.lessons?.length || 0)) {
       const targetLesson = course.value.lessons[idx - 1]
       currentLesson.value = targetLesson
-      router.replace({ query: { lesson: targetLesson.id } })
+      const { lesson_idx: _li, ...restQ } = route.query
+      router.replace({ query: { ...restQ, lesson: targetLesson.id } })
     }
   },
 )
@@ -166,69 +155,158 @@ function nextLesson() {
   if (hasNext.value) selectLesson(course.value.lessons[currentIdx.value + 1]) 
 }
 
+// Защита от двойного срабатывания — оба вотчера отслеживают одно значение
+let _lastProcessedAihl = null
+
 watch(currentLesson, () => {
   publishLessonContext()
-  
-  if (window.pendingHighlightText) {
-    const textToFind = window.pendingHighlightText;
-    window.pendingHighlightText = null;
-    
-    setTimeout(() => highlightAndScrollToText(textToFind), 800);
-    setTimeout(() => highlightAndScrollToText(textToFind), 1600);
+
+  const aihl = route.query.aihl
+  if (aihl && aihl !== _lastProcessedAihl) {
+    _lastProcessedAihl = aihl
+    router.replace({ query: { ...route.query, aihl: undefined } }).catch(() => {})
+    setTimeout(() => {
+      highlightAndScrollToText(String(aihl))
+    }, 100)
   }
 }, { flush: 'post' })
 
-function highlightAndScrollToText(text) {
-  if (!text) return false;
-  console.log('[highlight] trying to highlight:', text);
+// Срабатывает когда aihl появляется в URL, но урок уже открыт (currentLesson не менялся).
+watch(() => route.query.aihl, (aihl) => {
+  if (!aihl) {
+    _lastProcessedAihl = null
+    return
+  }
+  if (!currentLesson.value) return
+  if (aihl === _lastProcessedAihl) return  // уже обработан watch(currentLesson)
+  _lastProcessedAihl = aihl
+  router.replace({ query: { ...route.query, aihl: undefined } }).catch(() => {})
+  setTimeout(() => {
+    highlightAndScrollToText(String(aihl))
+  }, 100)
+})
 
-  const tryKey = (wordLimit) => {
-    const searchStr = highlightSearchKey(text, wordLimit);
-    if (!searchStr) return null;
-    return searchStr;
-  };
+function highlightAndScrollToText(text, attempt = 1) {
+  if (!text) return false
 
+  // Нормализация: нижний регистр, убрать пунктуацию, схлопнуть пробелы
   const normalize = (s) => String(s || '')
     .toLowerCase()
     .replace(/[.,/#!$%^&*;:{}=\-_`~()«»""''\n\r\t]/g, ' ')
     .replace(/\s+/g, ' ')
-    .trim();
+    .trim()
 
-  const selectors = [
-    'p', 'li', 'h1', 'h2', 'h3', 'h4', 'h5',
-    'td', 'blockquote', 'pre', 'code',
-    'div', 'span'
-  ];
+  const normed = normalize(text)
+  const words = normed.split(' ').filter(Boolean)
 
-  for (const wordLimit of [5, 4, 3, 2]) {
-    const searchStr = tryKey(wordLimit);
-    if (!searchStr) continue;
-    console.log('[highlight] searching for:', searchStr);
+  // Стратегия поиска (от точного к нечёткому):
+  // 1. Полная фраза (до 5 слов)
+  // 2. Первые 3 слова
+  // 3. Стемы длинных слов (срезаем 2 последних символа — покрывает русские окончания)
+  //    "унарный" → "унарны" найдёт "унарные", "унарного" и т.д.
+  const candidates = [
+    words.slice(0, 5).join(' '),
+    words.slice(0, 3).join(' '),
+    ...words
+      .filter(w => w.length > 5)
+      .sort((a, b) => b.length - a.length)
+      .map(w => w.slice(0, w.length - 2)),
+    ...words.filter(w => w.length > 4),
+  ].filter(Boolean)
 
-    for (const sel of selectors) {
-      const elements = document.querySelectorAll('.lesson-article ' + sel + ', .course-content ' + sel);
-      for (const el of elements) {
-        if (sel === 'div' || sel === 'span') {
-          const hasBlock = el.querySelector('p, h1, h2, h3, h4, h5, li');
-          if (hasBlock) continue;
+  // Убираем дубли
+  const seen = new Set()
+  const queue = candidates.filter(c => { if (seen.has(c)) return false; seen.add(c); return true })
+
+  const selectors = ['h1', 'h2', 'h3', 'h4', 'h5', 'pre', 'code', 'p', 'li', 'blockquote', 'td', 'div', 'span']
+
+  function applyHighlight(el) {
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    el.classList.remove('ai-highlight-block')
+    void el.offsetWidth
+    el.classList.add('ai-highlight-block')
+    setTimeout(() => el.classList.remove('ai-highlight-block'), 5000)
+  }
+
+  const querySelectorStr = selectors.map(sel => `.lesson-article ${sel}, .course-content ${sel}`).join(', ')
+  const elements = Array.from(document.querySelectorAll(querySelectorStr))
+  const allMatched = []
+
+  for (const el of elements) {
+    if ((el.tagName === 'DIV' || el.tagName === 'SPAN') && el.querySelector('p, h1, h2, h3, h4, h5, li, pre, code')) {
+      continue
+    }
+
+    const elText = el.textContent || el.innerText || ''
+    const elNorm = normalize(elText)
+
+    for (let cIdx = 0; cIdx < queue.length; cIdx++) {
+      const searchStr = queue[cIdx]
+      if (elNorm.includes(searchStr)) {
+        let score = 0
+
+        // 1. Base score by tag name (headers and code snippets are highly relevant)
+        const tag = el.tagName.toLowerCase()
+        if (tag.startsWith('h')) {
+          score += 120
+        } else if (tag === 'pre' || tag === 'code') {
+          score += 95
+        } else if (tag === 'p' || tag === 'li' || tag === 'blockquote') {
+          score += 40
+        } else if (tag === 'td') {
+          score += 30
+        } else {
+          score += 10
         }
-        const elNorm = normalize(el.innerText || el.textContent || '');
-        if (elNorm.includes(searchStr)) {
-          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          el.classList.remove('ai-highlight-block');
-          void el.offsetWidth;
-          el.classList.add('ai-highlight-block');
-          setTimeout(() => el.classList.remove('ai-highlight-block'), 5000);
-          return true;
+
+        // 2. Candidate specificity bonus (matching longer phrase is better)
+        score += (queue.length - cIdx) * 40
+
+        // 3. Exact match or word boundary bonus
+        if (elNorm === searchStr) {
+          score += 250
+        } else {
+          const escaped = searchStr.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&')
+          const isWord = new RegExp('\\b' + escaped + '\\b', 'i').test(elNorm)
+          if (isWord) {
+            score += 70
+          }
         }
+
+        // 4. Density bonus (shorter elements are more specific matches)
+        const lenDiff = elNorm.length - searchStr.length
+        if (lenDiff > 0) {
+          score -= Math.min(lenDiff * 0.1, 100)
+        }
+
+        // 5. Document order tie breaker (prefer elements that appear earlier)
+        const docOrderIndex = elements.indexOf(el)
+        score -= (docOrderIndex / elements.length) * 2
+
+        allMatched.push({ el, score, searchStr })
+        break
       }
     }
   }
 
-  console.warn('[highlight] text not found on page:', text);
-  addToast('Фрагмент не найден на странице урока', 'warning');
-  return false;
+  if (allMatched.length > 0) {
+    allMatched.sort((a, b) => b.score - a.score)
+    const best = allMatched[0]
+    console.log('[highlight] Best match scored:', best.score, 'Element:', best.el.tagName, 'Text:', best.el.textContent?.substring(0, 60), 'via:', best.searchStr)
+    applyHighlight(best.el)
+    return true
+  }
+
+  if (attempt < 4) {
+    console.log(`[highlight] not found on attempt ${attempt}, retrying in 300ms...`)
+    setTimeout(() => highlightAndScrollToText(text, attempt + 1), 300)
+    return false
+  }
+
+  console.warn('[highlight] text not found on page after retries:', text)
+  return false
 }
+
 
 function onFilesChange(e) { selectedFiles.value = e.target.files }
 
@@ -821,19 +899,7 @@ function closeAiPanel() {
   margin: 32px 0;
 }
 
-@keyframes aiHighlightAnim {
-  0% { background-color: rgba(234, 179, 8, 0.5); box-shadow: 0 0 15px rgba(234, 179, 8, 0.5); transform: scale(1.02); }
-  100% { background-color: transparent; box-shadow: none; transform: scale(1); }
-}
 
-:deep(.ai-highlight-block),
-.ai-highlight-block {
-  animation: aiHighlightAnim 4s ease-out forwards;
-  border-radius: 8px;
-  padding: 4px;
-  margin: -4px;
-  display: inline-block;
-}
 
 .lesson-navigation {
   display: flex;

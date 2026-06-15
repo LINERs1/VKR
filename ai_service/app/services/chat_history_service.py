@@ -58,6 +58,63 @@ def save_exchange(
     _trim_old(db, user_id, cid)
 
 
+def save_message(
+    db: Session,
+    *,
+    user_id: int,
+    course_id: str,
+    role: str,
+    content: str,
+) -> None:
+    if not user_id or not content.strip():
+        return
+    cid = course_id or "default"
+    db.add(
+        ChatMessage(
+            user_id=user_id,
+            course_id=cid,
+            role=role,
+            content=content.strip()[:12000],
+        )
+    )
+    db.commit()
+    _trim_old(db, user_id, cid)
+
+
+def save_voice_history(
+    db: Session,
+    *,
+    user_id: int,
+    course_id: str,
+    lesson_id: int | None,
+    call_id: str,
+    messages: list[dict],
+    audio_url: str | None = None,
+    duration_ms: int | None = None,
+) -> None:
+    if not user_id or not messages:
+        return
+    cid = course_id or "default"
+    for msg in messages:
+        content = msg.get("content", "").strip()
+        if not content:
+            continue
+        db.add(
+            ChatMessage(
+                user_id=user_id,
+                course_id=cid,
+                lesson_id=lesson_id,
+                call_id=call_id,
+                audio_url=audio_url,
+                duration_ms=duration_ms,
+                role=msg.get("role", "user"),
+                content=content[:12000],
+            )
+        )
+    db.commit()
+    _trim_old(db, user_id, cid)
+
+
 def _trim_old(db: Session, user_id: int, course_id: str) -> None:
     rows = (
         db.query(ChatMessage)

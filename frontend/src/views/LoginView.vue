@@ -7,36 +7,72 @@
         <p>Образовательная платформа</p>
       </div>
 
-      <div class="tabs">
-        <button :class="{ active: mode === 'login' }" @click="mode = 'login'">Вход</button>
-        <button :class="{ active: mode === 'register' }" @click="mode = 'register'">Регистрация</button>
+      <div class="tabs" v-if="mode === 'login' || mode === 'register'">
+        <button :class="{ active: mode === 'login' }" @click="switchMode('login')">Вход</button>
+        <button :class="{ active: mode === 'register' }" @click="switchMode('register')">Регистрация</button>
       </div>
 
       <form @submit.prevent="handleSubmit" class="auth-form">
-        <div class="input-group">
-          <label>Логин</label>
-          <input type="text" v-model="username" required placeholder="Введите логин" />
-        </div>
+        <!-- Поля для входа и регистрации -->
+        <template v-if="mode === 'login' || mode === 'register'">
+          <div class="input-group">
+            <label>Логин</label>
+            <input type="text" v-model="username" required placeholder="Введите логин" />
+          </div>
+          
+          <div v-if="mode === 'register'" class="input-group">
+            <label>Email</label>
+            <input type="email" v-model="email" required placeholder="example@mail.com" />
+          </div>
 
-        <div class="input-group">
-          <label>Пароль</label>
-          <input type="password" v-model="password" required placeholder="Введите пароль" />
-        </div>
+          <div class="input-group">
+            <label>Пароль</label>
+            <input type="password" v-model="password" required placeholder="Введите пароль" />
+          </div>
+        </template>
 
-        <div v-if="mode === 'register'" class="input-group">
-          <label>Роль</label>
-          <select v-model="role">
-            <option value="student">Студент</option>
-            <option value="teacher">Преподаватель</option>
-          </select>
-        </div>
+        <!-- Поля для восстановления пароля -->
+        <template v-if="mode === 'forgot'">
+          <h3 class="mode-title">Восстановление пароля</h3>
+          <p class="mode-desc">Введите ваш email, и мы отправим ссылку для сброса.</p>
+          <div class="input-group">
+            <label>Email</label>
+            <input type="email" v-model="email" required placeholder="example@mail.com" />
+          </div>
+        </template>
 
+        <template v-if="mode === 'reset'">
+          <h3 class="mode-title">Новый пароль</h3>
+          <p class="mode-desc">Токен был сгенерирован (см. консоль бэкенда).</p>
+          <div class="input-group">
+            <label>Токен сброса</label>
+            <input type="text" v-model="resetToken" required placeholder="Введите токен" />
+          </div>
+          <div class="input-group">
+            <label>Новый пароль</label>
+            <input type="password" v-model="newPassword" required placeholder="Минимум 6 символов" />
+          </div>
+        </template>
+
+        <!-- Сообщения об ошибках и успехе -->
         <div v-if="errorMsg" class="error-msg">{{ errorMsg }}</div>
+        <div v-if="successMsg" class="success-msg">{{ successMsg }}</div>
 
+        <!-- Кнопки отправки -->
         <button type="submit" class="submit-btn" :disabled="loading">
-          <span v-if="!loading">{{ mode === 'login' ? 'Войти' : 'Зарегистрироваться' }}</span>
+          <span v-if="!loading">
+            {{ mode === 'login' ? 'Войти' : 
+               mode === 'register' ? 'Зарегистрироваться' : 
+               mode === 'forgot' ? 'Отправить ссылку' : 'Сбросить пароль' }}
+          </span>
           <span v-else class="spinner"></span>
         </button>
+
+        <!-- Ссылки под кнопкой -->
+        <div class="auth-links">
+          <a href="#" v-if="mode === 'login'" @click.prevent="switchMode('forgot')" class="action-link">Забыли пароль?</a>
+          <a href="#" v-if="mode === 'forgot' || mode === 'reset'" @click.prevent="switchMode('login')" class="action-link">Вернуться ко входу</a>
+        </div>
       </form>
     </div>
   </div>
@@ -48,27 +84,49 @@ import { useRouter } from 'vue-router'
 import { useAuth } from '../composables/useAuth'
 
 const router = useRouter()
-const { login, register } = useAuth()
+const { login, register, forgotPassword, resetPassword } = useAuth()
 
 const mode = ref('login')
 const username = ref('')
 const password = ref('')
-const role = ref('student')
+const email = ref('')
+const resetToken = ref('')
+const newPassword = ref('')
+
 const errorMsg = ref('')
+const successMsg = ref('')
 const loading = ref(false)
+
+const switchMode = (newMode) => {
+  mode.value = newMode
+  errorMsg.value = ''
+  successMsg.value = ''
+}
 
 const handleSubmit = async () => {
   errorMsg.value = ''
+  successMsg.value = ''
   loading.value = true
+  
   try {
     if (mode.value === 'login') {
       await login(username.value, password.value)
       router.push('/')
-    } else {
-      await register(username.value, password.value, role.value)
-      // Сразу логиним после успешной регистрации
+    } else if (mode.value === 'register') {
+      await register(username.value, password.value, email.value)
       await login(username.value, password.value)
       router.push('/')
+    } else if (mode.value === 'forgot') {
+      const res = await forgotPassword(email.value)
+      successMsg.value = res.message || 'Ссылка отправлена. Проверьте консоль бэкенда!'
+      if (res.debug_token) {
+         resetToken.value = res.debug_token
+      }
+      setTimeout(() => { mode.value = 'reset' }, 2000)
+    } else if (mode.value === 'reset') {
+      const res = await resetPassword(resetToken.value, newPassword.value)
+      successMsg.value = res.message || 'Пароль успешно изменен'
+      setTimeout(() => { switchMode('login') }, 2000)
     }
   } catch (err) {
     errorMsg.value = err.message || 'Произошла ошибка'
@@ -130,6 +188,19 @@ const handleSubmit = async () => {
   font-size: 14px;
 }
 
+.mode-title {
+  font-size: 18px;
+  text-align: center;
+  margin: 0 0 8px;
+}
+
+.mode-desc {
+  font-size: 13px;
+  color: #a1a1aa;
+  text-align: center;
+  margin: 0 0 16px;
+}
+
 .tabs {
   display: flex;
   background: #09090b;
@@ -174,8 +245,7 @@ const handleSubmit = async () => {
   font-weight: 500;
 }
 
-.input-group input,
-.input-group select {
+.input-group input {
   background: #09090b;
   border: 1px solid rgba(255,255,255,0.1);
   border-radius: 12px;
@@ -186,8 +256,7 @@ const handleSubmit = async () => {
   transition: border-color 0.2s;
 }
 
-.input-group input:focus,
-.input-group select:focus {
+.input-group input:focus {
   border-color: #6366f1;
 }
 
@@ -196,6 +265,15 @@ const handleSubmit = async () => {
   font-size: 13px;
   text-align: center;
   background: rgba(244,63,94,0.1);
+  padding: 8px;
+  border-radius: 8px;
+}
+
+.success-msg {
+  color: #10b981;
+  font-size: 13px;
+  text-align: center;
+  background: rgba(16,185,129,0.1);
   padding: 8px;
   border-radius: 8px;
 }
@@ -225,6 +303,22 @@ const handleSubmit = async () => {
 .submit-btn:disabled {
   opacity: 0.7;
   cursor: not-allowed;
+}
+
+.auth-links {
+  text-align: center;
+  margin-top: 8px;
+}
+
+.action-link {
+  color: #a1a1aa;
+  font-size: 13px;
+  text-decoration: none;
+  transition: color 0.2s;
+}
+
+.action-link:hover {
+  color: #6366f1;
 }
 
 .spinner {

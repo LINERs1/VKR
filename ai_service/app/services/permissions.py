@@ -11,13 +11,9 @@ TOOL_PERMISSION: dict[str, str] = {
     "queryKnowledgeBase": "rag",
     "getPageContext": "navigate",
     "getHomeworkHint": "homework_hint",
-    "getHomeworkReminders": "homework_hint",
     "reviewHomework": "homework_review",
     "reviewAllHomeworks": "homework_mass_review",
-    "getTeacherSummary": "journal_summary",
     "fillHomeworkForm": "homework_form",
-    "getNotifications": "notifications",
-    "clearNotifications": "notifications",
 }
 
 

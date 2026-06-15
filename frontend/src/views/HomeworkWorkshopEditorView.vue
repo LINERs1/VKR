@@ -205,7 +205,7 @@ import GlassHeader from '../components/GlassHeader.vue'
 
 const route = useRoute()
 const router = useRouter()
-const { fetchUser } = useAuth()
+const { fetchUser, hasAccess } = useAuth()
 
 const loaded = ref(false)
 const saving = ref(false)
@@ -250,7 +250,7 @@ const lessonOptions = computed(() => {
 
 onMounted(async () => {
   const user = await fetchUser()
-  if (!user || user.role !== 'teacher') return router.push('/homeworks')
+  if (!user || !hasAccess('/homeworks/workshop', { adminOrTeacherOnly: true })) return router.push('/homeworks')
   try {
     courses.value = await apiFetch('/courses')
     students.value = await hwApi.getStudents()

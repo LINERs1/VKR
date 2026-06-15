@@ -25,6 +25,8 @@ from app.services.homework_journal_service import build_journal_summary, build_r
 from app.services.weak_topics_service import build_weak_topics_prompt_block
 from app.utils.navigation_prompt import build_navigation_prompt, build_db_navigation_routes_list
 from app.utils.role_capabilities import build_role_capabilities_prompt
+from app.services.metrics_service import record_metric
+
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -358,6 +360,7 @@ async def create_ultravox_call(
     session_id = req.session_id or str(uuid.uuid4())
     _save_voice_session(
         session_id,
+        user_id=current_user.id,
         course_id=req.course_id or "default",
         course_name=req.course_name or "EduAI",
         current_page=req.current_page or "",
@@ -598,6 +601,7 @@ async def create_ultravox_call(
 
     payload = {k: v for k, v in payload.items() if v is not None}
 
+    t_start = time.perf_counter()
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(
             f"{ULTRAVOX_BASE}/calls",
@@ -608,13 +612,31 @@ async def create_ultravox_call(
                 "Content-Type": "application/json"
             }
         )
+    duration_ms = (time.perf_counter() - t_start) * 1000
 
     if resp.status_code not in (200, 201):
         logger.error(f"Ultravox API error: {resp.status_code} {resp.text}")
+        record_metric(
+            db,
+            event_type="voice_session",
+            user_id=current_user.id,
+            course_id=req.course_id,
+            duration_ms=duration_ms,
+            success=False
+        )
         raise HTTPException(
             status_code=502,
             detail=f"Ultravox API error: {resp.status_code} — {resp.text[:300]}"
         )
+
+    record_metric(
+        db,
+        event_type="voice_session",
+        user_id=current_user.id,
+        course_id=req.course_id,
+        duration_ms=duration_ms,
+        success=True
+    )
 
     data = resp.json()
     return {
@@ -667,13 +689,27 @@ async def rag_query(req: RagQueryRequest, db: Session = Depends(get_db)):
     Это публичный endpoint — запросы идут от серверов Ultravox, не от пользователя.
     """
     try:
+        session_data = _voice_sessions.get(req.session_id) or {}
+        user_id = session_data.get("user_id")
+
         course_id = _resolve_course_id(req.session_id, req.course_id)
         if course_id == "default" or not course_id:
             return {"results": "Информация по данному запросу не найдена в материалах курса."}
 
+        t_rag = time.perf_counter()
         retriever = get_retriever(course_id)
         docs = await retriever.ainvoke(req.query)
         context = format_docs(docs, db)
+        rag_ms = (time.perf_counter() - t_rag) * 1000
+
+        record_metric(
+            db,
+            event_type="voice_rag",
+            user_id=user_id,
+            course_id=course_id,
+            duration_ms=rag_ms,
+            success=True,
+        )
 
         if not context.strip() or "(материалы курса не найдены)" in context:
             return {"results": "Информация по данному запросу не найдена в материалах курса."}

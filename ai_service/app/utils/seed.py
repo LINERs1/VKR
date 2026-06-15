@@ -105,12 +105,12 @@ def seed_nav_graph(db: Session):
             ))
 
     # Базовые страницы
-    add_node("/", "Главная", 1)
-    add_node("/profile", "Профиль", 1, roles=["student", "teacher"])
-    add_node("/journal", "Журнал успеваемости", 1, roles=["teacher"])
-    add_node("/homeworks", "Домашние задания", 1)
-    add_node("/analytics", "Аналитика", 1, roles=["teacher"])
-    add_node("/homeworks/workshop", "Мастерская ДЗ", 2, roles=["teacher"])
+    add_node("/", "Главная", 1, desc="Стартовая страница платформы. Сюда нужно вести пользователя по умолчанию или если он просит главное меню.")
+    add_node("/profile", "Профиль", 1, roles=["student", "teacher"], desc="Личный кабинет. Здесь студент может посмотреть свои данные, кубки и достижения.")
+    add_node("/journal", "Журнал успеваемости", 1, roles=["teacher"], desc="Журнал оценок для преподавателя.")
+    add_node("/homeworks", "Домашние задания", 1, desc="Список всех домашних заданий и их статусов (выполнено/не выполнено).")
+    add_node("/analytics", "Аналитика", 1, roles=["teacher"], desc="Дашборд с метриками работы ИИ и успеваемости.")
+    add_node("/homeworks/workshop", "Мастерская ДЗ", 2, roles=["teacher"], desc="Конструктор домашних заданий для преподавателя.")
 
     # Действия
     add_node("ACTION:CHECK_HW", "Проверить код ДЗ", 0, n_type="action", roles=["student"])

@@ -5,15 +5,13 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
-from app.api import chat, documents, widget, stt, ultravox, adaptive, analytics, navigation
-from app.api import webhooks, homework_check, embeddable, audit
+from app.api import chat, documents, widget, stt, ultravox, analytics, navigation
+from app.api import webhooks, homework_check
 from app.config import settings
 from app.database import Base, engine, SessionLocal
 import app.models.navigation      # noqa: F401
 import app.models.assistant_metric  # noqa: F401
-import app.models.audit_log       # noqa: F401
 import app.models.chat_message    # noqa: F401
-import app.models.student_weak_topic  # noqa: F401
 import app.models.mirror           # noqa: F401  ← облегчённые Course и Lesson
 
 logging.basicConfig(level=logging.INFO)
@@ -63,13 +61,10 @@ app.include_router(ultravox.router,  prefix="/api/ultravox",  tags=["ultravox"])
 app.include_router(chat.router,      prefix="/api",           tags=["chat"])
 app.include_router(analytics.router, prefix="/api/analytics", tags=["analytics"])
 app.include_router(documents.router, prefix="/api",           tags=["documents"])
-app.include_router(adaptive.router,  prefix="/api/adaptive",  tags=["adaptive"])
 app.include_router(stt.router,       prefix="/api",           tags=["stt"])
 app.include_router(widget.router,    prefix="/api",           tags=["widget"])
 app.include_router(navigation.router, prefix="/api/navigation", tags=["navigation"])
 app.include_router(homework_check.router, prefix="/api/homework", tags=["homework"])
-app.include_router(embeddable.router, prefix="/api/embeddable", tags=["embeddable"])
-app.include_router(audit.router, prefix="/api/audit", tags=["audit"])
 
 # Webhook-приёмники от платформы
 app.include_router(webhooks.router,  prefix="/webhook",       tags=["webhooks"])

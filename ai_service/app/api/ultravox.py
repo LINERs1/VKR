@@ -17,17 +17,16 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import get_db
-from app.services.auth_service import get_current_user
-from app.models.user import User
+from app.services.auth_service import get_current_user, DummyUser
 from app.models.mirror import CourseRef, LessonRef
-from app.services.rag_service import retrieve_course_docs, format_docs, _collection_doc_count
-from app.services.homework_journal_service import build_journal_summary, build_reminders
-from app.services.weak_topics_service import build_weak_topics_prompt_block
+from app.services.rag_service import get_retriever, format_docs
 from app.utils.navigation_prompt import build_navigation_prompt, build_db_navigation_routes_list
 from app.utils.role_capabilities import build_role_capabilities_prompt
 from app.services.ultravox_tools import build_voice_tools
 from app.services.permissions import resolve_permissions
 from app.services.audit_service import record_audit
+from app.services.metrics_service import record_metric
+
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -170,7 +169,7 @@ def _courses_for_prompt(req: CreateCallRequest, db: Session) -> List[Dict[str, A
 
 
 def _build_system_prompt(
-    user: User,
+    user: DummyUser,
     req: CreateCallRequest,
     available_courses: List[Dict[str, Any]],
     db: Session,
@@ -179,7 +178,7 @@ def _build_system_prompt(
     role_ru = "Преподаватель" if user.role == "teacher" else "Студент"
     role_en = user.role
     assistant = settings.ASSISTANT_NAME
-    user_info = f"Пользователь: {user.username} ({role_ru}). Контекст: {req.course_name}."
+    user_info = f"Пользователь: {user.username} ({role_ru}). Context: {req.course_name}."
 
     courses = _courses_for_prompt(req, db)
     courses_list = "\n".join([f"- {c['title']}" for c in courses])
@@ -218,7 +217,6 @@ def _build_system_prompt(
     nav_instructions = build_navigation_prompt(db_routes, voice=True)
 
     hw_rules = ""
-    extra_tools = ""
     if role_en == "student":
         hw_rules = (
             "⚠️ СТРОЖАЙШИЙ ЗАПРЕТ: ТЕБЕ КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО РЕШАТЬ ТЕСТЫ ИЛИ ДАВАТЬ ПРЯМЫЕ ОТВЕТЫ НА ДОМАШКУ! "
@@ -226,15 +224,6 @@ def _build_system_prompt(
             "Твоя задача — ТОЛЬКО задавать наводящие вопросы (сократический метод) и заставлять студента думать самому. "
             "Никогда не произноси правильный ответ на тест вслух. Если нарушишь это правило — тест будет провален."
         )
-        try:
-            rem = build_reminders(db, user)
-            if rem.get("message"):
-                page_info_lines.append(f"НАПОМИНАНИЕ О ДЗ: {rem['message']}")
-            weak_block = build_weak_topics_prompt_block(db, user.id, req.course_id or "default")
-            if weak_block:
-                page_info_lines.append(weak_block)
-        except Exception:
-            pass
     else:
         hw_rules = (
             "ДОМАШНИЕ ЗАДАНИЯ: Проводи полный анализ кода/ответа студента. "
@@ -244,23 +233,8 @@ def _build_system_prompt(
             "Если в контексте указано, что работа уже graded с оценкой — НЕ вызывай reviewHomework; "
             "озвучь оценку и отзыв из контекста экрана. "
             "Вызови reviewHomework только для работы в статусе submitted (ещё не оценена преподавателем). "
-            "Перед проверкой спроси подтверждение; при согласии вызови reviewHomework с confirm=true. "
-            "Для сводки «кто не сдал», «средний балл», «кто ждёт проверки» — getTeacherSummary. "
             "Не читай вслух HTML-теги."
         )
-        extra_tools = (
-            "Инструмент getTeacherSummary — актуальная сводка журнала: средние баллы по курсам, "
-            "кто не сдал, что ждёт проверки."
-        )
-        try:
-            summary = build_journal_summary(db, user.id)
-            if summary.get("overall_avg") is not None:
-                page_info_lines.append(
-                    f"СВОДКА ЖУРНАЛА: средний балл {summary['overall_avg']}, "
-                    f"на проверке {summary['pending_review_count']}, не сдано {summary['not_submitted_count']}."
-                )
-        except Exception:
-            pass
 
     assistant = settings.ASSISTANT_NAME
 
@@ -278,18 +252,25 @@ def _build_system_prompt(
     behavior_rules.append("4. На приветствие отвечай тепло и коротко, без навигации.")
     behavior_rules.append(f"5. {hw_rules}")
     behavior_rules.append("6. ПОИСК ПЕРЕД ОТВЕТОМ: Прежде чем отвечать на вопрос по теме курса, вызови queryKnowledgeBase. Отвечай только по найденной информации. Если пользователь явно попросил НАЙТИ фрагмент текста или ПОКАЗАТЬ где это написано — перейди на найденный урок (navigatePage) и передай highlight_text. Если пользователь просто задал вопрос (например, 'что такое функция?') — просто ответь вслух, НИКУДА НЕ ПЕРЕХОДЯ.")
-    if extra_tools:
-        behavior_rules.append(f"7. {extra_tools}")
 
     # Workshop-specific instructions
     is_on_workshop = (req.current_path or '').startswith('/homeworks/workshop/')
     if role_en == 'teacher' and is_on_workshop:
         behavior_rules.append(
-            "8. МАСТЕРСКАЯ ДЗ: Ты сейчас находишься на странице создания домашнего задания. "
+            "7. МАСТЕРСКАЯ ДЗ: Ты сейчас находишься на странице создания домашнего задания. "
             "Если преподаватель говорит что-то вроде 'создай задание', 'придумай описание', 'напиши тест', 'добавь вопрос', 'заполни код' — "
             "НЕМЕДЛЕННО вызови инструмент fillHomeworkForm с нужными параметрами. "
             "Можешь заполнить одно поле или сразу все. Генерируй содержательный, реальный текст задания по теме курса. "
             "После вызова скажи вслух что именно ты заполнил."
+        )
+
+    if role_en == 'admin':
+        behavior_rules.append(
+            "8. ОТЧЕТЫ ДЛЯ АДМИНИСТРАТОРА: Если администратор просит аналитический отчет или статистику системы, "
+            "СНАЧАЛА спроси у него, какой именно нужен: Сводный (summary) или Детальный (detailed). "
+            "Дождись его ответа. Когда он ответит, вызови инструмент adminGetReport с параметром report_type. "
+            "Получив данные от сервера, не читай их как код! Выдели 2-3 самые главные цифры (количество курсов, пользователей, "
+            "или количество диалогов с ИИ) и зачитай их внятно вслух."
         )
 
     behavior_rules_str = "\n".join(behavior_rules)
@@ -330,7 +311,7 @@ def _build_system_prompt(
 # ─── Endpoints ────────────────────────────────────────────────────────────────
 
 @router.get("/models")
-async def list_ultravox_models(current_user: User = Depends(get_current_user)):
+async def list_ultravox_models(current_user: DummyUser = Depends(get_current_user)):
     """Список моделей, доступных вашему API-ключу (актуально с Ultravox)."""
     if not settings.ULTRAVOX_API_KEY:
         raise HTTPException(status_code=500, detail="ULTRAVOX_API_KEY not configured")
@@ -352,7 +333,7 @@ async def list_ultravox_models(current_user: User = Depends(get_current_user)):
 @router.post("/call")
 async def create_ultravox_call(
     req: CreateCallRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: DummyUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """
@@ -380,7 +361,7 @@ async def create_ultravox_call(
     courses = _courses_for_prompt(req, db)
     system_prompt = _build_system_prompt(current_user, req, courses, db)
 
-    selected_tools = build_voice_tools(current_user.role, granted)
+    selected_tools = build_voice_tools(current_user.role)
 
     voice_id = req.voice_id or settings.ULTRAVOX_VOICE_ID or None
     voice_overrides = _build_voice_overrides(voice_id) if voice_id else None
@@ -404,6 +385,7 @@ async def create_ultravox_call(
 
     payload = {k: v for k, v in payload.items() if v is not None}
 
+    t_start = time.perf_counter()
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(
             f"{ULTRAVOX_BASE}/calls",
@@ -414,13 +396,31 @@ async def create_ultravox_call(
                 "Content-Type": "application/json"
             }
         )
+    duration_ms = (time.perf_counter() - t_start) * 1000
 
     if resp.status_code not in (200, 201):
         logger.error(f"Ultravox API error: {resp.status_code} {resp.text}")
+        record_metric(
+            db,
+            event_type="voice_session",
+            user_id=current_user.id,
+            course_id=req.course_id,
+            duration_ms=duration_ms,
+            success=False
+        )
         raise HTTPException(
             status_code=502,
             detail=f"Ultravox API error: {resp.status_code} — {resp.text[:300]}"
         )
+
+    record_metric(
+        db,
+        event_type="voice_session",
+        user_id=current_user.id,
+        course_id=req.course_id,
+        duration_ms=duration_ms,
+        success=True
+    )
 
     data = resp.json()
     record_audit(
@@ -448,7 +448,7 @@ async def create_ultravox_call(
 @router.post("/context")
 async def update_voice_context(
     req: UpdateVoiceContextRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: DummyUser = Depends(get_current_user),
 ):
     """Обновляет контекст страницы во время активного голосового звонка."""
     _save_voice_session(
@@ -488,6 +488,9 @@ async def rag_query(req: RagQueryRequest, db: Session = Depends(get_db)):
     Это публичный endpoint — запросы идут от серверов Ultravox, не от пользователя.
     """
     try:
+        session_data = _voice_sessions.get(req.session_id) or {}
+        user_id = session_data.get("user_id")
+
         course_id = _resolve_course_id(req.session_id, req.course_id)
         if course_id == "default" or not course_id:
             return {
@@ -495,9 +498,20 @@ async def rag_query(req: RagQueryRequest, db: Session = Depends(get_db)):
                 "indexed_chunks": 0,
             }
 
+        t_rag = time.perf_counter()
         indexed = _collection_doc_count(course_id)
         docs = await retrieve_course_docs(course_id, req.query)
         context = format_docs(docs, db)
+        rag_ms = (time.perf_counter() - t_rag) * 1000
+
+        record_metric(
+            db,
+            event_type="voice_rag",
+            user_id=user_id,
+            course_id=course_id,
+            duration_ms=rag_ms,
+            success=True,
+        )
 
         if not context.strip() or "(материалы курса не найдены)" in context:
             hint = (

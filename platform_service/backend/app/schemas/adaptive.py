@@ -53,7 +53,5 @@ class DetailedAnalyticsResponse(BaseModel):
     summary: dict
     daily_events: list
     perf_by_day: list
-    homework: dict
-    hw_by_day: list
     student_activity: list
     weak_topics: list
