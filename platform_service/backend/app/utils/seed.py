@@ -115,6 +115,13 @@ USERS_DATA = [
         "role": UserRole.teacher,
         "password_hash": "$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBPj/UpfVTiQUm",
     },
+    {
+        "username": "admin1",
+        "full_name": "Администратор системы",
+        "email": "admin1@example.com",
+        "role": UserRole.admin,
+        "password_hash": "$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBPj/UpfVTiQUm",  # "password"
+    },
 ]
 
 

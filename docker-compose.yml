@@ -12,7 +12,7 @@ services:
     env_file:
       - ./platform_service/backend/.env
     volumes:
-      - ./platform_service/backend/platform.db:/app/platform.db
+      - ./platform_service/backend/app.db:/app/app.db
 
   ai_service:
     build: ./ai_service

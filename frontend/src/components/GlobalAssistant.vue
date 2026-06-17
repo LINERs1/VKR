@@ -118,6 +118,125 @@ function getPageText() {
   } catch (e) { return '' }
 }
 
+// ─── Подсветка фрагмента на странице урока (тег [HIGHLIGHT:...] от модели) ───
+let _eduaiHlStyleInjected = false
+let _eduaiHlClearTimer = null
+function injectHighlightStyle() {
+  if (_eduaiHlStyleInjected || document.getElementById('eduai-highlight-style')) {
+    _eduaiHlStyleInjected = true
+    return
+  }
+  const style = document.createElement('style')
+  style.id = 'eduai-highlight-style'
+  // Глобальный (не scoped) — применяется к DOM страницы урока
+  style.textContent = `
+    mark.eduai-highlight {
+      background: rgba(255, 214, 102, 0.55);
+      color: inherit;
+      padding: 0 2px;
+      border-radius: 3px;
+      box-shadow: 0 0 0 2px rgba(255, 214, 102, 0.25);
+    }
+    .eduai-highlight-flash { animation: eduai-flash 2.4s ease-out 1; border-radius: 6px; }
+    @keyframes eduai-flash {
+      0%   { background-color: rgba(255, 214, 102, 0.45); box-shadow: 0 0 0 8px rgba(255,214,102,0.20); }
+      55%  { background-color: rgba(255, 214, 102, 0.15); box-shadow: 0 0 0 0 rgba(255,214,102,0); }
+      100% { background-color: transparent; box-shadow: none; }
+    }`
+  document.head.appendChild(style)
+  _eduaiHlStyleInjected = true
+}
+
+function clearHighlights() {
+  document.querySelectorAll('mark.eduai-highlight').forEach(m => {
+    const p = m.parentNode
+    if (!p) return
+    p.replaceChild(document.createTextNode(m.textContent), m)
+    p.normalize()
+  })
+  document.querySelectorAll('.eduai-highlight-flash').forEach(el =>
+    el.classList.remove('eduai-highlight-flash'))
+}
+
+/** Самый «глубокий» элемент внутри root, чей нормализованный textContent содержит q (lowercased). */
+function findDeepestMatch(root, qLow) {
+  const norm = s => (s || '').replace(/\s+/g, ' ').toLowerCase()
+  let best = null
+  const stack = [root]
+  while (stack.length) {
+    const node = stack.pop()
+    if (node.nodeType !== 1) continue
+    if (norm(node.textContent).includes(qLow)) {
+      // предпочтение — более конкретному (короткому) элементу
+      if (!best || node.textContent.length < best.textContent.length) best = node
+      for (const child of node.children) stack.push(child)
+    }
+  }
+  return best
+}
+
+/** Обернуть точное (побайтовое, case-insensitive) вхождение цитаты в <mark>. */
+function wrapMatch(el, qLow) {
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null)
+  let node
+  while ((node = walker.nextNode())) {
+    const t = node.nodeValue || ''
+    const idx = t.toLowerCase().indexOf(qLow)
+    if (idx >= 0) {
+      try {
+        const range = document.createRange()
+        range.setStart(node, idx)
+        range.setEnd(node, idx + qLow.length)
+        const mark = document.createElement('mark')
+        mark.className = 'eduai-highlight'
+        range.surroundContents(mark)
+        return mark
+      } catch (_) { return null }
+    }
+  }
+  return null
+}
+
+/**
+ * Подсветить дословную цитату на странице урока и прокрутить к ней.
+ * Сначала ищем точное совпадение по всей цитате, затем — по префиксу (первые 4 слова).
+ */
+function highlightOnPage(rawQuery) {
+  const query = (rawQuery || '').replace(/\s+/g, ' ').trim()
+  if (query.length < 2) return
+  injectHighlightStyle()
+  clearHighlights()
+  if (_eduaiHlClearTimer) { clearTimeout(_eduaiHlClearTimer); _eduaiHlClearTimer = null }
+
+  const containers = [
+    document.querySelector('.course-content .content-wrapper'),
+    document.querySelector('.course-content'),
+    document.querySelector('main'),
+    document.querySelector('#app'),
+    document.body,
+  ].filter(Boolean)
+
+  const tryQuery = (q) => {
+    if (!q || q.length < 2) return false
+    const qLow = q.toLowerCase()
+    for (const root of containers) {
+      const el = findDeepestMatch(root, qLow)
+      if (!el) continue
+      const mark = wrapMatch(el, qLow)
+      const target = mark || el
+      target.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      target.classList.add('eduai-highlight-flash')
+      return true
+    }
+    return false
+  }
+
+  const hit = tryQuery(query) || tryQuery(query.split(' ').slice(0, 4).join(' '))
+  if (hit) {
+    _eduaiHlClearTimer = setTimeout(clearHighlights, 6000)
+  }
+}
+
 function lessonContextFields() {
   const lesson = getActiveLessonContext()
   if (!lesson) return {}
@@ -518,6 +637,21 @@ async function runVoiceNavigate(params) {
       agentReaction: AgentReaction.SPEAKS,
     }
   }
+  // ЖЁСТКИЙ СТОРОЖ: внутри курса запрещаем уход на ДРУГОЙ курс.
+  // Статика (/, /profile, /journal …) — разрешена.
+  const _curCid = courseId.value !== 'default' ? courseId.value : null
+  const _tgtCid = courseIdFromPath(resolved.path)
+  if (_curCid && _tgtCid && _tgtCid !== _curCid) {
+    return {
+      result:
+        `ЗАПРЕЩЕНО: сейчас пользователь находится ВНУТРИ курса «${courseName.value || _curCid}», ` +
+        `переход на другой курс «${_tgtCid}» и подсветка фрагментов чужого курса запрещены. ` +
+        `Скажи пользователю своими словами, что подсветка и переход работают только в рамках текущего курса, ` +
+        `и предложи вернуться на главную, чтобы выбрать другой курс.`,
+      responseType: 'tool-response',
+      agentReaction: AgentReaction.SPEAKS,
+    }
+  }
   const ok = await tryVoiceNavigate(resolved.path, { highlight })
   if (ok) {
     return {
@@ -579,6 +713,12 @@ function parseNavTarget(rawPath) {
   const pathOnly = (resolveNavigatePathLocal(pathname) || pathname).split('?')[0]
   if (!pathOnly) return null
   return Object.keys(query).length ? { path: pathOnly, query } : { path: pathOnly }
+}
+
+/** Извлекает course_id из пути вида /courses/<id>(?...). Вернёт null для статики. */
+function courseIdFromPath(path) {
+  const m = String(path || '').match(/^\/courses\/([^/?#]+)/i)
+  return m ? m[1] : null
 }
 
 function extractNavPathFromText(raw) {
@@ -792,6 +932,20 @@ async function runOpenLesson(params) {
       result: cid
         ? 'Ошибка: Не передан lesson_number (порядковый номер урока).'
         : `Ошибка: Курс «${rawCid || '?'}» не найден в системе.`,
+      responseType: 'tool-response',
+      agentReaction: AgentReaction.SPEAKS,
+    }
+  }
+
+  // ЖЁСТКИЙ СТОРОЖ: внутри курса запрещаем открывать урок ДРУГОГО курса.
+  const _curCid = courseId.value !== 'default' ? courseId.value : null
+  if (_curCid && cid !== _curCid) {
+    return {
+      result:
+        `ЗАПРЕЩЕНО: пользователь находится ВНУТРИ курса «${courseName.value || _curCid}». ` +
+        `Открывать уроки другого курса «${cid}» нельзя. ` +
+        `Скажи пользователю, что подсветка и переходы работают только в текущем курсе, ` +
+        `предложи вернуться на главную и выбрать нужный курс.`,
       responseType: 'tool-response',
       agentReaction: AgentReaction.SPEAKS,
     }
@@ -2226,6 +2380,8 @@ async function handleUserVoice(text) {
           }
         } else if (evt.type === 'action' && evt.action === 'navigate') {
           executeAction(evt)
+        } else if (evt.type === 'highlight') {
+          highlightOnPage(String(evt.text ?? ''))
         } else if (evt.type === 'sources') {
           history.value[assistantIdx].sources = Array.isArray(evt.content) ? evt.content : []
         } else if (evt.type === 'error') {
@@ -2414,6 +2570,8 @@ async function sendStream() {
           await scrollBottom()
         } else if (evt.type === 'action') {
           executeAction(evt)
+        } else if (evt.type === 'highlight') {
+          highlightOnPage(String(evt.text ?? ''))
         } else if (evt.type === 'error') {
           errorText.value = String(evt.content ?? 'Неизвестная ошибка')
         }

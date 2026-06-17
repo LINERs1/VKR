@@ -58,20 +58,20 @@ def build_db_navigation_routes_list(db: Any, role: str | None = None, voice: boo
     for p in pages:
         title = p.title
         identifier = p.identifier
-        
+
         # Вычисляем порядковый номер урока в курсе
         if identifier.startswith("/courses/") and "?lesson=" in identifier:
             course_id = identifier.split("?")[0].replace("/courses/", "")
-            
+
             # Если мы находимся на конкретном курсе, скрываем уроки других курсов
             if current_course_id and current_course_id != "default" and course_id != current_course_id:
                 continue
-                
+
             if course_id not in course_lesson_counters:
                 course_lesson_counters[course_id] = 1
             else:
                 course_lesson_counters[course_id] += 1
-            
+
             idx = course_lesson_counters[course_id]
             # Добавляем номер урока в название
             if title.startswith("Урок:"):
@@ -99,19 +99,8 @@ def build_db_navigation_routes_list(db: Any, role: str | None = None, voice: boo
     lines.append("")
     
     # 1.5 Домашние задания пользователя (если он студент)
-    if user and role == "student":
-        from app.models.homework import HomeworkAssignment
-        assignments = db.query(HomeworkAssignment).filter(HomeworkAssignment.student_id == user.id).all()
-        if assignments:
-            lines.append("Доступные домашние задания:")
-            for a in assignments:
-                hw = a.homework
-                if hw:
-                    route_cmd = f"navigatePage(path=\"/homeworks/{hw.id}\")" if voice else f"[NAVIGATE:/homeworks/{hw.id}]"
-                    lines.append(f"  - ДЗ: {hw.title} (по курсу {hw.course_id}) -> {route_cmd}")
-            lines.append("")
-
-    # 2. Потом возможные действия
+    # Удалено: ИИ-сервис не имеет доступа к таблице HomeworkAssignment напрямую.
+    # Если нужно, данные о ДЗ должны передаваться с фронтенда в payload.
     actions = [n for n in nodes if n.node_type == "action"]
     if actions:
         lines.append("Доступные действия на платформе:")

@@ -63,14 +63,20 @@ def check_course_sync(db: Session) -> dict:
 
 def auto_pull_missing_courses(db: Session, platform_courses: list[dict], missing_ids: list[str]):
     """Автоматически вытягивает тексты недостающих курсов и сохраняет их в ИИ-сервис."""
-    from app.models.navigation import NavNode
+    from app.models.navigation import NavNode, NavEdge
+    from app.models.mirror import CourseRef, LessonRef
     from langchain_core.documents import Document
     from langchain_text_splitters import RecursiveCharacterTextSplitter
     from app.services.rag_service import get_vector_store
+    from app.api.webhooks import _create_nav_node, _link_nodes
 
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=100)
     added_courses_count = 0
     added_chunks_count = 0
+
+    # Предзагрузим действия (actions) для связей уроков
+    action_hw = db.query(NavNode).filter(NavNode.identifier == "ACTION:CHECK_HW").first()
+    action_hint = db.query(NavNode).filter(NavNode.identifier == "ACTION:GET_HINT").first()
 
     for course in platform_courses:
         course_id = str(course.get("id"))
@@ -79,52 +85,96 @@ def auto_pull_missing_courses(db: Session, platform_courses: list[dict], missing
             
         logger.info(f"Начинаю автоматическую загрузку курса: {course.get('title')}")
         
-        # 1. Добавляем узел навигации в SQL базу ИИ-сервиса (чтобы ИИ знал этот путь)
+        # 0. Идемпотентное создание зеркала курса (CourseRef)
+        course_ref = db.query(CourseRef).filter(CourseRef.id == course_id).first()
+        if not course_ref:
+            course_ref = CourseRef(id=course_id, title=course.get("title") or f"Курс {course_id}")
+            db.add(course_ref)
+        else:
+            course_ref.title = course.get("title") or f"Курс {course_id}"
+
+        # 1. Добавляем узел навигации для Курса с помощью хелпера
         nav_path = f"/courses/{course_id}"
-        existing_nav = db.query(NavNode).filter(NavNode.identifier == nav_path).first()
-        if not existing_nav:
-            new_nav = NavNode(
-                identifier=nav_path,
-                title=course.get("title") or f"Курс {course_id}",
-                description=course.get("description") or "",
-                node_type="course",
-            )
-            db.add(new_nav)
-            db.flush() # Получаем ID для нового узла
+        course_nav = _create_nav_node(
+            db=db,
+            identifier=nav_path,
+            title=course.get("title") or f"Курс {course_id}",
+            depth=2,
+            node_type="page"
+        )
 
-            # Создаем связь (ребро) от Главной страницы к новому курсу
-            home_node = db.query(NavNode).filter(NavNode.identifier == "/").first()
-            if home_node:
-                from app.models.navigation import NavEdge
-                db.add(NavEdge(source_node_id=home_node.id, target_node_id=new_nav.id))
-                db.add(NavEdge(source_node_id=new_nav.id, target_node_id=home_node.id))
+        # Создаем связи от Главной страницы к новому курсу
+        home_node = db.query(NavNode).filter(NavNode.identifier == "/").first()
+        if home_node:
+            _link_nodes(db, home_node.id, course_nav.id)
+            _link_nodes(db, course_nav.id, home_node.id)
 
-            db.commit()
-
-        # 2. Обрабатываем уроки и добавляем тексты в векторную базу (ChromaDB)
+        # 2. Обрабатываем уроки
         lessons = course.get("lessons") or []
         docs = []
-        for lesson in lessons:
-            content = lesson.get("content")
-            if not content:
-                continue
-                
-            # Создаем документ для векторной БД
-            doc = Document(
-                page_content=content,
-                metadata={
-                    "source": "lesson",
-                    "course_id": course_id,
-                    "lesson_id": str(lesson.get("id")),
-                    "title": lesson.get("title") or ""
-                }
+        for idx, lesson in enumerate(lessons, start=1):
+            lesson_id = int(lesson.get("id"))  # Кастуем к int
+            lesson_title = lesson.get("title") or ""
+            
+            # 2.1 Идемпотентное создание зеркала урока (LessonRef)
+            lesson_ref = db.query(LessonRef).filter(LessonRef.id == lesson_id).first()
+            if not lesson_ref:
+                lesson_ref = LessonRef(id=lesson_id, course_id=course_id, title=lesson_title)
+                db.add(lesson_ref)
+            else:
+                lesson_ref.title = lesson_title
+
+            # 2.2 Создание узла навигации для Урока с помощью хелпера
+            lesson_nav_path = f"/courses/{course_id}?lesson={lesson_id}"
+            lesson_nav = _create_nav_node(
+                db=db,
+                identifier=lesson_nav_path,
+                title=f"Урок {idx}: {lesson_title}",
+                depth=3,
+                node_type="page"
             )
-            docs.append(doc)
+
+            # Связь от курса к уроку — обычная навигация
+            _link_nodes(db, course_nav.id, lesson_nav.id)
+
+            # Связи от урока к действиям (can_execute).
+            # _link_nodes здесь не подходит: он жёстко ставит "navigates_to",
+            # а для action-узлов нужно "can_execute". Прокладываем вручную с
+            # идемпотентной проверкой (фильтруем именно по can_execute, чтобы
+            # не словить левое navigates_to ребро, если оно когда-то создалось).
+            for action_node in (action_hw, action_hint):
+                if action_node is None:
+                    continue
+                exists = db.query(NavEdge).filter(
+                    NavEdge.source_node_id == lesson_nav.id,
+                    NavEdge.target_node_id == action_node.id,
+                    NavEdge.relationship_type == "can_execute",
+                ).first()
+                if not exists:
+                    db.add(NavEdge(
+                        source_node_id=lesson_nav.id,
+                        target_node_id=action_node.id,
+                        relationship_type="can_execute",
+                    ))
+
+            # 2.3 Собираем тексты для ChromaDB
+            content = lesson.get("content")
+            if content:
+                doc = Document(
+                    page_content=content,
+                    metadata={
+                        "source": "lesson",
+                        "course_id": course_id,
+                        "lesson_id": str(lesson_id),
+                        "title": lesson_title
+                    }
+                )
+                docs.append(doc)
+
+        db.commit()
 
         if docs:
-            # Нарезаем уроки на чанки
             chunks = text_splitter.split_documents(docs)
-            # Сохраняем в векторное хранилище конкретного курса
             store = get_vector_store(course_id)
             store.add_documents(chunks)
             added_chunks_count += len(chunks)

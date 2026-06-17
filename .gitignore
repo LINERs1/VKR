@@ -27,3 +27,9 @@ frontend/src/components/*.py
 frontend/src/components/*.script.txt
 **/.venv/
 .venv/
+
+# Office lock files
+~$*
+
+# Local DB backups
+backups/

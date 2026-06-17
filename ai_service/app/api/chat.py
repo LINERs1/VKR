@@ -66,12 +66,19 @@ async def retrieve_context_for_chat(message: str, course_id: str):
 
 _ACTION_RE = re.compile(r'\[(NAVIGATE|SHOW_COURSES):([^\]]*)\]', re.IGNORECASE)
 
+# Тег подсветки фрагмента на странице урока: [HIGHLIGHT:дословная цитата]
+_HIGHLIGHT_RE = re.compile(r'\[HIGHLIGHT:([^\]]*)\]', re.IGNORECASE)
+
 def _normalize_nav_path(path: str) -> str:
     from app.services.navigation_service import normalize_nav_path
     return normalize_nav_path(path) or "/"
 
 
-def _process_navigate_action(raw_path: str, page_context: dict) -> tuple[str | None, str | None, list | None]:
+def _process_navigate_action(
+    raw_path: str,
+    page_context: dict,
+    current_course_id: str | None = None,
+) -> tuple[str | None, str | None, list | None]:
     """Валидация [NAVIGATE:...] по списку курсов из виджета платформы."""
     from app.services.navigation_service import CourseNavItem, validate_navigate_path
 
@@ -83,6 +90,21 @@ def _process_navigate_action(raw_path: str, page_context: dict) -> tuple[str | N
 
     res = validate_navigate_path(raw_path, courses)
     if res.status in ("ok", "static") and res.path:
+        # ЖЁСТКИЙ СТОРОЖ: внутри курса блокируем переход на ДРУГОЙ курс,
+        # даже если модель поставила тег [NAVIGATE:/courses/<чужой_id>].
+        # Статические пути (/, /profile, /journal, …) и тот же курс — разрешены.
+        if current_course_id and current_course_id != settings.DEFAULT_COURSE_ID:
+            target_course = res.course_id
+            if not target_course:
+                m = re.match(r"^/courses/([^/?]+)", res.path)
+                if m:
+                    target_course = m.group(1)
+            if target_course and target_course != current_course_id:
+                logger.info(
+                    "Blocked cross-course NAVIGATE: %r (current=%s, target=%s)",
+                    raw_path, current_course_id, target_course,
+                )
+                return None, None, None
         return "navigate", res.path, None
     if res.status == "ambiguous":
         return "show_courses", raw_path, res.matches
@@ -111,10 +133,12 @@ class ChatResponse(BaseModel):
     sources: list[str] = []
 
 def _strip_nav_tags(text: str) -> str:
-    """Удаляет [NAVIGATE:...] и [SHOW_COURSES:...] теги из отображаемого текста."""
-    return _ACTION_RE.sub('', text).strip()
+    """Удаляет экшен-теги ([NAVIGATE:...], [SHOW_COURSES:...], [HIGHLIGHT:...]) из отображаемого текста."""
+    text = _ACTION_RE.sub('', text)
+    text = _HIGHLIGHT_RE.sub('', text)
+    return text.strip()
 
-async def _stream_tokens(chain, inputs: dict, page_context: dict | None = None):
+async def _stream_tokens(chain, inputs: dict, page_context: dict | None = None, current_course_id: str | None = None):
     """Генератор токенов с обработкой экшен-тегов."""
     full_response = ""
     display_buffer = ""
@@ -146,7 +170,7 @@ async def _stream_tokens(chain, inputs: dict, page_context: dict | None = None):
                         action_type = match.group(1).upper()
                         val = match.group(2)
                         if action_type == 'NAVIGATE':
-                            nav_kind, nav_val, _extra = _process_navigate_action(val, page_context or {})
+                            nav_kind, nav_val, _extra = _process_navigate_action(val, page_context or {}, current_course_id)
                             if nav_kind == 'navigate' and nav_val:
                                 yield ('action', 'navigate', nav_val)
                             elif nav_kind == 'show_courses':
@@ -154,8 +178,15 @@ async def _stream_tokens(chain, inputs: dict, page_context: dict | None = None):
                         elif action_type == 'SHOW_COURSES':
                             yield ('action', 'show_courses', val)
                     else:
-                        # Не экшен-тег — показываем как текст
-                        display_buffer += nav_buffer
+                        hl_match = _HIGHLIGHT_RE.match(nav_buffer)
+                        if hl_match:
+                            # Тег подсветки — отдаём фрагмент отдельным событием, в текст не попадает
+                            hl_text = hl_match.group(1).strip()
+                            if hl_text:
+                                yield ('highlight', hl_text)
+                        else:
+                            # Не экшен-тег — показываем как текст
+                            display_buffer += nav_buffer
                     nav_buffer = ""
 
     # Сбрасываем остатки
@@ -213,7 +244,7 @@ async def stream_rag_response(
 
         t_llm = time.perf_counter()
         async for event_type, *content_args in _stream_tokens(
-            chain, {"context": context, "question": message, "history": history_text}, ctx
+            chain, {"context": context, "question": message, "history": history_text}, ctx, course_id
         ):
             if event_type == 'token':
                 yield f"data: {json.dumps({'type': 'token', 'content': content_args[0]})}\n\n"
@@ -227,6 +258,8 @@ async def stream_rag_response(
                     if len(content_args) > 2 and content_args[2]:
                         payload['matches'] = content_args[2]
                     yield f"data: {json.dumps(payload)}\n\n"
+            elif event_type == 'highlight':
+                yield f"data: {json.dumps({'type': 'highlight', 'text': content_args[0]})}\n\n"
             elif event_type == 'full':
                 full_response = content_args[0]
 
@@ -358,7 +391,7 @@ async def stream_rag_voice_response(
         comma_re = re.compile(r'([,;]\s+)')
 
         async for event_type, *content_args in _stream_tokens(
-            chain, {"context": context, "question": message, "history": history_text}, ctx
+            chain, {"context": context, "question": message, "history": history_text}, ctx, course_id
         ):
             if event_type == 'token':
                 content = content_args[0]
@@ -392,6 +425,8 @@ async def stream_rag_voice_response(
                     if len(content_args) > 2 and content_args[2]:
                         payload['matches'] = content_args[2]
                     yield f"data: {json.dumps(payload)}\n\n"
+            elif event_type == 'highlight':
+                yield f"data: {json.dumps({'type': 'highlight', 'text': content_args[0]})}\n\n"
             elif event_type == 'full':
                 full_response = content_args[0]
 
